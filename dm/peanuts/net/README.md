@@ -2,7 +2,8 @@
 
 Games go online on [Nextendo Network](https://nextendo.network), the community replacement for Nintendo's online
 services. Off unless `PN_ONLINE=1` is in the host's environment (`env.txt`), and then only for a game build it is verified
-on: `g_verified` in `pn_net.c`, by main's build ID (today Mario Kart 8 Deluxe 4.0.1). Any other game stays offline with a
+on: `g_verified` in `pn_net.c`, by main's build ID (today Mario Kart 8 Deluxe 4.0.1 and Animal Crossing: New Horizons 3.0.3).
+Any other game stays offline with a
 `[RED]` line until it is tried with `PN_ONLINE_UNVERIFIED=1` and added there. Off, every network call keeps
 upstream's offline answers (`dm/host/hle_net.c`, `hle_offline.c`, `hle_account.c`). Upstream's local wireless over IP (`DM_COOP`,
 `hle_coop.c`) replaces the same socket calls, so with `DM_COOP` set online play stays off for the run (a `[RED]` line says so).
@@ -15,8 +16,9 @@ code is left as the rewriter leaves it; what changes is the system it calls.
 
 | File | What it serves |
 |---|---|
-| `pn_net.c` | nifm (the network is up, the phone's address), the SDK's socket calls on Android's sockets, the resolver with Nextendo's DNS redirect, nsd's server names |
-| `pn_ssl.c` | `nn::ssl` and the `nnssl*` C interface on Mbed TLS (`dm/peanuts/third_party/mbedtls`) |
+| `pn_net.c` | nifm (the network is up, the phone's address), the SDK's socket calls on Android's sockets, the resolver with Nextendo's DNS redirect (both forms of `addrinfo`, below), nsd's server names, pctl's communication with others (allowed, as on a console without parental controls; upstream refuses it offline) |
+| `pn_ssl.c` | `nn::ssl` and the `nnssl*` C interface on Mbed TLS (`dm/peanuts/third_party/mbedtls`), with the server certificate buffer and ALPN that the SDK's libcurl uses |
+| `pn_npns.c` | `npns:u`, push notifications, as a console whose push channel never delivers anything (a session of upstream's `hle_sf.c`, through its `pn_sf_session` hook) |
 | `pn_trust.c`, `pn_nextendo_ca.h` | which server certificates a connection trusts (below); Nextendo Network's published root CA |
 | `pn_account.c` | the network service account as the Nextendo account (PID, id_token); the error applet on the host stack |
 | `pn_friends.c` | the friends calls a game makes around online play: they succeed and change nothing |
@@ -26,6 +28,11 @@ The SDK's socket API (Mario Kart 8 Deluxe's SDK 4.4, on musl) mixes numberings: 
 `sockaddr` are FreeBSD's, but error numbers, `fcntl`'s `O_NONBLOCK`, poll events and `MSG_*` flags are Linux's. The
 host replaces the SDK's client functions, so it speaks the game's side of that API, not the bsd service's behind it
 (which yuzu / Eden / Lemon emulate). See the comment at the top of `pn_net.c`.
+
+The SDK has two forms of `addrinfo`. The C library's `struct addrinfo` has BSD's order (`ai_canonname` at +0x18, `ai_addr` at
++0x20); `nn::socket::AddrInfo`, which the typed `GetAddrInfo` overload fills, has `ai_addr` at +0x18 and `ai_canonname` at +0x20, and a
+one-byte family. Animal Crossing's Pia reads the typed form (`main+0x1270f0`); filled in BSD's order, it took the host name for the
+address and its NAT check sent to `49.45.37.46` ("1-%." of `nncs1-%.n.n.srv.nintendo.net`), failing with 2618-0201.
 
 ## Servers and certificates
 
@@ -40,12 +47,14 @@ Every TLS connection verifies the server's certificate, with its host name (`pn_
 
 - **A connection to an address of the redirect** trusts Nextendo Network's root CA (`pn_nextendo_ca.h`: `romfs/sd/rootCA.pem` of
   Prelude-Nextendo, the certificate Nextendo publishes for its clients). Its account, `znc` and NAT-check servers present
-  certificates that CA issued for their names. Nextendo's game servers still present one self-signed certificate with no host
-  name (`CN=nintendo-private-server`; Mario Kart 8 Deluxe's `g2b309e01-lp1.s.n.srv.nintendo.net`, on both addresses), which a
-  redirected connection alone takes by its pinned public key (SHA-256 of the SubjectPublicKeyInfo, `770551f1…74b8`; more with
-  `PN_NEXTENDO_PIN`). Nothing else is accepted there: another self-signed key, a wrong name or an expired certificate fails.
+  certificates that CA issued for their names, and so do the NEX secure servers (`*.s.n.srv.nintendo.net`). Some of Nextendo's
+  game services still present a self-signed certificate with no host name (`CN=nintendo-private-server`), which a redirected
+  connection alone takes by its pinned public key (SHA-256 of the SubjectPublicKeyInfo; more with `PN_NEXTENDO_PIN`):
+  `770551f1…74b8` for Mario Kart 8 Deluxe's `g2b309e01-lp1.s.n.srv.nintendo.net` (on both addresses), `02baa0f9…b925` for
+  Animal Crossing: New Horizons' island services `api.hac.lp1.acbaa.srv.nintendo.net` (checked 2026-11-16; ACNHRecomp pins the
+  same key). Nothing else is accepted there: another self-signed key, a wrong name or an expired certificate fails.
 - **Any other connection** trusts the phone's system CAs (`/apex/com.android.conscrypt/cacerts`, else
-  `/system/etc/security/cacerts`), and neither Nextendo's CA nor the pin.
+  `/system/etc/security/cacerts`), and neither Nextendo's CA nor the pins.
 
 A refused certificate fails the handshake, and the log says what it was checked against and why. The game's own verification
 settings are not taken (the certificates it expects are Nintendo's, which none of these servers present).
@@ -111,5 +120,20 @@ writes the account into the app's `env.txt` over adb (for testing the host side 
   (`g2b309e01-lp1.s.n.srv.nintendo.net`) by its pinned key, log in, and join Worldwide rooms with 8 to 10 other players
   (0.5 to 1.6 MB of Pia traffic in). No certificate was refused. With Online play off (Turnip, 65 s of play at 60 fps) the log
   has no line of this folder's and no `[RED]` line that a run from before it lacks.
+- 2026-11-16, on the AYN Thor with Animal Crossing: New Horizons 3.0.3 (Happy Home Paradise, Turnip Gen8 V39), on a copy of an
+  island past its first day: it signs in, registers the island with its island services (`api.hac.lp1.acbaa.srv.nintendo.net`,
+  `POST /api/v1/lands`, 200), logs in on its game server (`g2ee2e300-lp1.s.n.srv.nintendo.net`, the CA's `*.s.n.srv.nintendo.net`
+  on 443 and 60007), passes Pia's NAT check, and hosts: Orville gives a Dodo Code. Five things stood in the way, each fixed for every
+  game: pctl refused communication with others ("enable Communicate with Others in Parental Controls"); the SDK's libcurl gave
+  the ssl connection a certificate buffer and an ALPN list, whose calls reached the SDK's own code and failed (2219-1035 before
+  a byte was sent; `GetServerCertDetail` reads the certificate's size from the SDK's Connection object, which this handshake never
+  fills, so it is answered here too); once online the game connects to `npns:u` itself and aborted on upstream's "not registered";
+  the typed `addrinfo` above; and the island services' own self-signed key, pinned. Mario Kart 8 Deluxe 4.0.1 online again
+  afterwards: the same sign-in, NAT check and races (5.7 MB of Pia traffic each way), and the same `[RED]` lines as before.
+- Open (Animal Crossing): visiting another island is not tested (it needs another player). Nextendo has no push server, so
+  best-friend messages and requests show only when the game reads its lists again. The network service account ID is the
+  Nextendo PID; ACNHRecomp gives the account's `baasUserID` (`nsa` of `/api/me`), which friend lists match on. The SDK's libcurl
+  calls a non-blocking `DoHandshake` in a loop without polling: about 57,000 calls (0.4 s) for one handshake to
+  `api-lp1.znc.srv.nintendo.net`.
 - Open: a Poll that mixes the game's sockets with upstream's eventfds reports nothing for the eventfds; ssl calls on
   a connection after its Destroy fail (`cn_id`), which Mario Kart only does while tearing down.

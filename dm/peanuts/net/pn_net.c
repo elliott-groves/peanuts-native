@@ -1,5 +1,5 @@
 // PEANUTS: online networking for Nextendo Network, on when PN_ONLINE=1 (pn_net.h, README.md in this folder). Served here: nifm (the network is up, the phone's address),
-// BSD sockets on Android's, the resolver with Nextendo Network's redirect, and nsd's server names (ssl, the account and friends: pn_ssl.c, pn_account.c, pn_friends.c).
+// BSD sockets on Android's, the resolver with Nextendo Network's redirect, nsd's server names, and pctl's communication with others (ssl, the account and friends: pn_ssl.c, pn_account.c, pn_friends.c).
 // Online play and upstream's local wireless over IP (DM_COOP, hle_coop.c) replace the same socket calls, so with DM_COOP set online play stays off.
 //
 // The guest's side of the socket calls is the SDK's client API, which the host replaces (Mario Kart 8 Deluxe's SDK 4.4 on musl, traced with PN_NET_TRACE): its option levels
@@ -42,6 +42,7 @@ int dm_sk_select(int nfds, const uint64_t *r, const uint64_t *w, const uint64_t 
 // other build of these, stays offline with a [RED] line, until it is tried with PN_ONLINE_UNVERIFIED=1 and added here.
 static const struct { const char *main, *what; } g_verified[] = {
     {"158c0c7399aabd7bf83795c2ef3484c7", "Mario Kart 8 Deluxe 4.0.1"},
+    {"ff1d1c05670db6021c85b624a710b963", "Animal Crossing: New Horizons 3.0.3"},
 };
 static const char *verified(const char *build) {
     for (unsigned i = 0; i < sizeof g_verified / sizeof *g_verified; i++) if (!strcasecmp(build, g_verified[i].main)) return g_verified[i].what;
@@ -425,12 +426,17 @@ static int sk_select(int nfds, uint64_t *r, uint64_t *w, uint64_t *e, const int6
 }
 
 // ---------- the resolver ----------
-// The guest's addrinfo has Android's field order (both BSD's): flags, family, socktype, protocol, addrlen, canonname, addr, next; its sockaddr is the guest's
-static int sk_getaddrinfo(const char *node, const char *serv, const void *hints, void **res) {
+// The SDK has two forms of addrinfo. The C library's struct addrinfo (GetAddrInfo(..., addrinfo const*, addrinfo**), nnsocketGetAddrInfo) has Android's field
+// order (both BSD's): flags, family, socktype, protocol, addrlen, canonname (+0x18), addr (+0x20), next (+0x28). nn::socket::AddrInfo (the typed overloads) has
+// addr at +0x18 and canonname at +0x20, and its family is one byte: Animal Crossing: New Horizons 3.0.3 writes the hint's family with strb at +4 and reads a
+// result's address from +0x18 (main+0x1270f0, Pia's NAT check). With BSD's order there it took the canonical name for the address (the NAT check sent to
+// 49.45.37.46, "1-%." of "nncs1-%.n.n.srv.nintendo.net", and failed with 2618-0201). typed: the second form. Its sockaddr is the guest's either way
+static int sk_getaddrinfo_(const char *node, const char *serv, const void *hints, void **res, int typed) {
     if (res) *res = NULL;
     struct addrinfo hh = {.ai_family = AF_INET}, *hr = NULL;
-    if (hints) { const int32_t *hi = hints; hh.ai_flags = hi[0] & (AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV); hh.ai_socktype = hi[2]; hh.ai_protocol = hi[3];
-                 if (hi[1] != 0 && hi[1] != G_AF_INET) return EAI_FAMILY; }
+    if (hints) { const int32_t *hi = hints; int fam = typed ? ((const uint8_t *)hints)[4] : hi[1];
+                 hh.ai_flags = hi[0] & (AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV); hh.ai_socktype = hi[2]; hh.ai_protocol = hi[3];
+                 if (fam != 0 && fam != G_AF_INET) return EAI_FAMILY; }
     const char *red = redirect_of(node);
     int rc = getaddrinfo(red ? red : node, serv, &hh, &hr);
     if (rc) { LOG("online: resolve %s: %s", node ? node : "(none)", gai_strerror(rc)); return rc; }   // Android's EAI_* are BSD's numbers
@@ -445,6 +451,7 @@ static int sk_getaddrinfo(const char *node, const char *serv, const void *hints,
         o->ai_flags = a->ai_flags; o->ai_family = G_AF_INET; o->ai_socktype = a->ai_socktype; o->ai_protocol = a->ai_protocol;
         o->ai_addrlen = sizeof *sa; o->ai_addr = (struct sockaddr *)sa;
         if (cl) { o->ai_canonname = (char *)(sa + 1); memcpy(o->ai_canonname, canon, cl); }
+        if (typed) { void *ad = o->ai_addr; o->ai_addr = (struct sockaddr *)o->ai_canonname; o->ai_canonname = ad; }   // nn::socket::AddrInfo: addr at +0x18, canonname at +0x20
         if (red) remember(in->sin_addr.s_addr, node);
         if (!head) ip_text(in->sin_addr.s_addr, b);
         *tail = o; tail = &o->ai_next;
@@ -455,6 +462,7 @@ static int sk_getaddrinfo(const char *node, const char *serv, const void *hints,
     if (res) *res = head; else for (struct addrinfo *a = head, *nx; a; a = nx) { nx = a->ai_next; free(a); }
     return 0;
 }
+static int sk_getaddrinfo(const char *node, const char *serv, const void *hints, void **res) { return sk_getaddrinfo_(node, serv, hints, res, 0); }
 static void sk_freeaddrinfo(void *ai) { for (struct addrinfo *a = ai, *nx; a; a = nx) { nx = a->ai_next; free(a); } }   // ours: one block per entry
 static void *sk_gethostbyname(const char *name) {
     static __thread struct { struct hostent he; char name[256]; char *aliases[1]; uint32_t addr[8]; char *list[9]; } t;
@@ -554,6 +562,18 @@ PN_FORCE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", WHY ": no p
 PN_FORCE("_ZN2nn3nsd9ResolveExEPNS0_4FqdnERKS1_", WHY ": server name with the environment put in", Result, pn_nsd_ResolveEx, char *out, const char *in) { return nsd_resolve(out, in); }
 PN_FORCE("_ZN2nn3nsd7ResolveEPNS0_4FqdnERKS1_", WHY ": server name with the environment put in", Result, pn_nsd_Resolve, char *out, const char *in) { return nsd_resolve(out, in); }
 
+// pctl: communication with others. Upstream answers "never" (hle_misc.c: networking out of scope, unless DM_COOP), and Animal Crossing: New Horizons then
+// refuses its online play with "enable Communicate with Others in Parental Controls". Online, the answer is a console's without parental controls: allowed,
+// no system UI. The game's own bool return; the argument (show the system's UI) is not taken.
+static unsigned pctl_free(const char *what) {
+    static _Atomic int once;
+    if (!atomic_exchange(&once, 1)) LOG("online: pctl %s: communication with others allowed (no parental controls)", what);
+    return 1;
+}
+PN_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", WHY ": communication with others allowed", unsigned, pn_pctl_CheckFree, unsigned ui) { (void)ui; return pctl_free("CheckFreeCommunicationPermission"); }
+PN_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", WHY ": communication with others allowed", unsigned, pn_pctl_TryBegin, unsigned ui) { (void)ui; return pctl_free("TryBeginFreeCommunication"); }
+PN_FORCE("_ZN2nn4pctl28IsFreeCommunicationAvailableEv", WHY ": communication with others allowed", unsigned, pn_pctl_IsFree, void) { return pctl_free("IsFreeCommunicationAvailable"); }
+
 // socket, SDK 4-era overloads (plain sockaddr / pollfd / fd_set, int flags)
 PN_FORCE("_ZN2nn6socket6SocketEiii", WHY, int, pn_sk_Socket, int d, int t, int p) { return sk_socket(d, t, p); }
 PN_FORCE("_ZN2nn6socket5CloseEi", WHY, int, pn_sk_Close, int s) { return sk_close(s, "_ZN2nn6socket5CloseEi"); }
@@ -598,7 +618,7 @@ PN_FORCE("_ZN2nn6socket4RecvEiPvmNS0_7MsgFlagE", WHY, long, pn_sk2_Recv, int s, 
 PN_FORCE("_ZN2nn6socket4SendEiPKvmNS0_7MsgFlagE", WHY, long, pn_sk2_Send, int s, const void *b, unsigned long n, int f) { return sk_send(s, b, n, f); }
 PN_FORCE("_ZN2nn6socket8RecvFromEiPvmNS0_7MsgFlagEPNS0_8SockAddrEPj", WHY, long, pn_sk2_RecvFrom, int s, void *b, unsigned long n, int f, void *a, unsigned *al) { return sk_recvfrom(s, b, n, f, a, al); }
 PN_FORCE("_ZN2nn6socket6SendToEiPKvmNS0_7MsgFlagEPKNS0_8SockAddrEj", WHY, long, pn_sk2_SendTo, int s, const void *b, unsigned long n, int f, const void *a, unsigned al) { return sk_sendto(s, b, n, f, a, al); }
-PN_FORCE_BIG("_ZN2nn6socket11GetAddrInfoEPKcS2_PKNS0_8AddrInfoEPPS3_", WHY ": with Nextendo Network's redirect", int, pn_sk2_Gai, const char *h, const char *s, const void *hi, void **r) { return sk_getaddrinfo(h, s, hi, r); }
+PN_FORCE_BIG("_ZN2nn6socket11GetAddrInfoEPKcS2_PKNS0_8AddrInfoEPPS3_", WHY ": with Nextendo Network's redirect", int, pn_sk2_Gai, const char *h, const char *s, const void *hi, void **r) { return sk_getaddrinfo_(h, s, hi, r, 1); }
 PN_FORCE("_ZN2nn6socket12FreeAddrInfoEPNS0_8AddrInfoE", WHY, void, pn_sk2_FreeAi, void *ai) { sk_freeaddrinfo(ai); }
 
 // socket, C interface
