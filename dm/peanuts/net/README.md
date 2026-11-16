@@ -85,6 +85,7 @@ writes the account into the app's `env.txt` over adb (for testing the host side 
 | `PN_NET_TRACE=1` | every socket and ssl call on the game's connections, with its result and the game's call site |
 | `PN_NEXTENDO_SERVER`, `PN_NEXTENDO_NAT` | the redirect's addresses (default: Nextendo Network's) |
 | `PN_NEXTENDO_PIN` | more server keys a redirected connection takes (SHA-256 of the SubjectPublicKeyInfo, 64 hex digits, comma-separated), for a Nextendo server whose self-signed key changed |
+| `PN_NEXTENDO_COUNTRY` | the account's country, an ISO 3166-1 alpha-2 code (`US`, `GB`, ...): Mario Kart 8 Deluxe's flag (Settings › Online › Country) |
 | `PN_NEXTENDO_PID`, `PN_NEXTENDO_TOKEN` | the signed-in account: Settings › Online hands it to each run (`peanuts/scripts/nextendo-signin.py` writes it from a computer); never logged |
 
 ## Status
