@@ -60,7 +60,7 @@ public final class Nextendo {
     private static final String REDIRECT = "http://127.0.0.1:" + PORT + "/callback";
     private static final int SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000, HTTP_TIMEOUT_MS = 20_000;
     private static final long REFRESH_BELOW_MS = 12 * 3600_000L, USABLE_ABOVE_MS = 10 * 60_000L;
-    private static final String PREFS = "peanuts_nextendo", K_ONLINE = "online", K_USER = "username", K_REFRESH = "refresh", K_GAME = "game", KEY_ALIAS = "peanuts_nextendo";
+    private static final String PREFS = "peanuts_nextendo", K_ONLINE = "online", K_USER = "username", K_REFRESH = "refresh", K_GAME = "game", K_NAME = "player_name", K_COUNTRY = "country", KEY_ALIAS = "peanuts_nextendo";
     private static final Handler UI = new Handler(Looper.getMainLooper());
     private static final AtomicBoolean busy = new AtomicBoolean();
     private static final List<Runnable> watchers = new ArrayList<>();
@@ -75,6 +75,44 @@ public final class Nextendo {
     /** The signed-in account's username, or null when signed out */
     public static String username(Context c) { return prefs(c).contains(K_REFRESH) ? prefs(c).getString(K_USER, "") : null; }
     /** When the game token runs out (ms since the epoch), 0 when there is none */
+    /** The player's name in games (DM_NICK, the account nickname: hle_account.c GetNickname): the one chosen here, else the Nextendo username, else null (the host's "Player") */
+    public static String playerName(Context c) {
+        String n = prefs(c).getString(K_NAME, null);
+        if (n != null) return n;
+        String u = username(c);
+        return u == null || u.isEmpty() ? null : nickname(u);
+    }
+    public static boolean playerNameChosen(Context c) { return prefs(c).contains(K_NAME); }
+    /** Sets the name (cut to a console's 10 characters, without control characters); null or blank: back to the Nextendo username */
+    public static void playerName(Context c, String n) {
+        String v = n == null ? "" : nickname(n);
+        if (v.isEmpty()) prefs(c).edit().remove(K_NAME).apply(); else prefs(c).edit().putString(K_NAME, v).apply();
+        changed();
+    }
+    /** At most 10 characters and 32 bytes of UTF-8 (nn::account::Nickname: char[33], hle_account.c copies 32), no control characters */
+    public static String nickname(String s) {
+        StringBuilder b = new StringBuilder(); int n = 0, bytes = 0;
+        for (int cp : s.trim().codePoints().toArray()) {
+            if (Character.isISOControl(cp)) continue;
+            int k = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+            if (n == 10 || bytes + k > 32) break;
+            b.appendCodePoint(cp); n++; bytes += k;
+        }
+        return b.toString().trim();
+    }
+    /** The account's country for online play (PN_NEXTENDO_COUNTRY: Mario Kart 8 Deluxe's flag), an ISO 3166-1 alpha-2 code: the one chosen, else the phone's, else null */
+    public static String country(Context c) {
+        String cc = prefs(c).getString(K_COUNTRY, null);
+        if (cc == null) cc = Locale.getDefault().getCountry();
+        return cc != null && cc.matches("[A-Z]{2}") ? cc : null;
+    }
+    public static boolean countryChosen(Context c) { return prefs(c).contains(K_COUNTRY); }
+    public static void country(Context c, String cc) {
+        if (cc == null || !cc.matches("[A-Z]{2}")) prefs(c).edit().remove(K_COUNTRY).apply(); else prefs(c).edit().putString(K_COUNTRY, cc).apply();
+        changed();
+    }
+    public static String countryName(String cc) { return cc == null ? "" : new Locale.Builder().setRegion(cc).build().getDisplayCountry(Locale.ENGLISH); }
+
     public static long tokenExpiry(Context c) { JSONObject g = gameToken(c); return g == null ? 0 : g.optLong("exp"); }
     public static boolean working() { return busy.get(); }
     /** Whether this build has a Nextendo application to sign in with (-PnxNextendoClientId, -PnxNextendoRedirectPort) */
@@ -104,10 +142,14 @@ public final class Nextendo {
     // ---------- the game's environment for one run (GameActivity, on the UI thread: never the network here) ----------
     public static List<String> envLines(Context c, String gameEnv) {
         List<String> out = new ArrayList<>();
+        String name = playerName(c);
+        if (name != null) out.add("DM_NICK=" + name);   // online or not (an env.txt line of the player's comes later and wins)
         if (!online(c)) return out;
         String game = verified(gameEnv);
         if (game == null) { Log.i(TAG, "online play is not verified for this game's build: it starts offline, and gets no account"); return out; }
         out.add("PN_ONLINE=1");
+        String cc = country(c);
+        if (cc != null) out.add("PN_NEXTENDO_COUNTRY=" + cc);
         JSONObject g = gameToken(c);
         if (g != null && g.optLong("exp") - System.currentTimeMillis() > USABLE_ABOVE_MS) {
             out.add("PN_NEXTENDO_PID=" + g.optLong("pid"));
