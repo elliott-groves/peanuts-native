@@ -14,12 +14,14 @@ Banana Native ships several releases a day, so this fork is kept as a **thin ove
    - `android/app/src/main/java/dev/nxnative/android/GameActivity.java` — create/destroy the companion `Presentation`; (2026-11-13) one line in
      `onCreate` that touches the last-3-played list for dynamic shortcuts (`dev.peanuts.launch.RecentGames`, `peanuts/docs/LAUNCHERS.md`); and
      (2026-11-13) in `start()`'s env assembly, two lines adding `DM_ROMFS_OVERLAY`/`DM_CHEATS` for the enabled Mods (`dev.peanuts.mods.ModRuntime`,
-     `design/platform/DESIGN-MODS.md`).
+     `design/platform/DESIGN-MODS.md`); and one line adding the run's online env lines
+     (`dev.peanuts.online.Nextendo.envLines`: Settings › Online, `dm/peanuts/net/README.md`).
    - `android/app/src/main/cpp/nxlaunch.c` — JNI entry points forwarded to `dm/peanuts`; the run's env log line hides the Nextendo account (`PN_NEXTENDO_PID`, `PN_NEXTENDO_TOKEN`).
    - `android/host/CMakeLists.txt`, `android/app/src/main/cpp/CMakeLists.txt` — add the `dm/peanuts` sources.
    - `dm/host/loader.c` — `force_lookup` asks `dm/peanuts/net` first (`pn_force_lookup`, Android only), so its online hooks win while `PN_ONLINE=1`.
    - `dm/gfx/vk_android/vka_present.c` — one call per presented frame (`peanuts_tick()`), beside `ovl_draw`.
-   - `android/app/build.gradle` — applicationId / label.
+   - `android/app/build.gradle` — applicationId / label; the Nextendo
+     application (`-PnxNextendoClientId`, `-PnxNextendoRedirectPort`: `dm/peanuts/net/README.md`).
    - `android/app/src/main/AndroidManifest.xml` — new Peanuts-owned activities/services/aliases, each its own marked block (already used for
      `CatalogActivity` and `GameHold`; 2026-11-13 added the `dev.peanuts.launch.LaunchActivity` alias, `peanuts/docs/LAUNCHERS.md`).
    - `android/app/src/main/java/dev/nxnative/android/AppStorage.java` — (2026-11-13) `pack()` prefers an existing pack already in the app's own storage,

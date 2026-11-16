@@ -791,3 +791,12 @@ stage, `build.sh … tools`, and an APK built with it). No shader-chain file is 
 | `android/app/src/main/cpp/nxlaunch.c` | 1 | the env log line prints `(hidden)` for `PN_NEXTENDO_PID` and `PN_NEXTENDO_TOKEN` | `// PEANUTS:` |
 
 Upstream candidate: no (Peanuts' online play).
+
+### Round 14, online play on Nextendo Network: Settings › Online (2026-11-16)
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `android/app/src/main/java/dev/nxnative/android/GameActivity.java` | 1 | `start()` adds `dev.peanuts.online.Nextendo.envLines(this, Prefs.gameEnv(this, id))` (`PN_ONLINE` and the account, for a verified game build only) to the run's env | `// PEANUTS:` |
+| `android/app/build.gradle` | 2 | `-PnxNextendoClientId` / `-PnxNextendoRedirectPort` (the builder's own Nextendo application) into `BuildConfig` | `// PEANUTS` on each line |
+
+Upstream candidate: no.
