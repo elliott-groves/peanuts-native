@@ -800,3 +800,11 @@ Upstream candidate: no (Peanuts' online play).
 | `android/app/build.gradle` | 2 | `-PnxNextendoClientId` / `-PnxNextendoRedirectPort` (the builder's own Nextendo application) into `BuildConfig` | `// PEANUTS` on each line |
 
 Upstream candidate: no.
+
+### Round 14, -PnxAppId (2026-11-16)
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `android/app/build.gradle` | 2 | `-PnxAppId=<suffix>` (default `nxApp`) names the application ID `dev.nxnative.android.<suffix>`, so a development build installs beside the app | `// PEANUTS` on each line |
+
+Upstream candidate: no (it serves `-PnxApp=peanuts`).

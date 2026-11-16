@@ -20,7 +20,7 @@ Banana Native ships several releases a day, so this fork is kept as a **thin ove
    - `android/host/CMakeLists.txt`, `android/app/src/main/cpp/CMakeLists.txt` — add the `dm/peanuts` sources.
    - `dm/host/loader.c` — `force_lookup` asks `dm/peanuts/net` first (`pn_force_lookup`, Android only), so its online hooks win while `PN_ONLINE=1`.
    - `dm/gfx/vk_android/vka_present.c` — one call per presented frame (`peanuts_tick()`), beside `ovl_draw`.
-   - `android/app/build.gradle` — applicationId / label; the Nextendo
+   - `android/app/build.gradle` — applicationId / label (`-PnxAppId=<suffix>`: a development build beside the app, with its own data); the Nextendo
      application (`-PnxNextendoClientId`, `-PnxNextendoRedirectPort`: `dm/peanuts/net/README.md`).
    - `android/app/src/main/AndroidManifest.xml` — new Peanuts-owned activities/services/aliases, each its own marked block (already used for
      `CatalogActivity` and `GameHold`; 2026-11-13 added the `dev.peanuts.launch.LaunchActivity` alias, `peanuts/docs/LAUNCHERS.md`).
