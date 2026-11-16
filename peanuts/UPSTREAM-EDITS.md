@@ -778,3 +778,16 @@ the Mac's split of the same game found them.
 Run: `build.sh <work dir> python`, then on the AYN Thor with `dm_pack_cli`, `shader_split.unsized()` on linked and independent-block LZ4 frames: both
 open; with `lz4/frame` moved away, the same `[RED]` line as the failed Prepare. Not run: a whole Prepare of the game on the phone (it needs the full
 stage, `build.sh … tools`, and an APK built with it). No shader-chain file is changed. Upstream candidate: yes (upstream's `build.sh` has the same gap).
+
+### Round 14, online play on Nextendo Network: the host (2026-11-16)
+
+`dm/peanuts/net` serves the network, ssl, account and friends calls while `PN_ONLINE=1` (`dm/peanuts/net/README.md`), from a hook table of its own
+(`pnforce`): upstream's `swforce` table cannot hold a second entry of a name, so the online hooks are asked first instead.
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `dm/host/loader.c` | 1 | `force_lookup` asks `pn_force_lookup` first, Android's host only (`#if PLAT_ANDROID`); it answers NULL unless `PN_ONLINE=1` | `// PEANUTS:` |
+| `android/host/CMakeLists.txt` | 1 | `dm/peanuts/net/*.c` and Mbed TLS (`dm/peanuts/third_party/mbedtls/library/*.c`, `-O2 -w`) in `HOST_C`, with their include folders and `MBEDTLS_USER_CONFIG_FILE` | `# PEANUTS:` on each line |
+| `android/app/src/main/cpp/nxlaunch.c` | 1 | the env log line prints `(hidden)` for `PN_NEXTENDO_PID` and `PN_NEXTENDO_TOKEN` | `// PEANUTS:` |
+
+Upstream candidate: no (Peanuts' online play).
