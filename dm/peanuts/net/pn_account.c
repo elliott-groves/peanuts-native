@@ -12,6 +12,7 @@
 #include "pn_net.h"
 #include <inttypes.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,8 +123,21 @@ PN_FORCE_BIG("_ZN2nn7account37LoadNetworkServiceAccountIdTokenCacheEPmPcmRKNS0_1
     LOG("online: account: id_token handed out (%d bytes)", k);
     return RES_OK;
 }
-// Still upstream's answer (no Nintendo Account info), traced
-PN_FORCE_BIG("_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAccountInfoERKNS0_10UserHandleEPvm", WHY ": upstream's answer, traced", Result, pn_acc_NaInfo, void *info, const void *u, void *buf, uint64_t n) {
+// The Nintendo Account's cached info, for its country: Mario Kart 8 Deluxe shows a player's flag from CachedNintendoAccountInfo::GetCountry, and upstream's answer (no
+// Nintendo Account, 2162-0001) left it with none. CachedNintendoAccountInfo, as the SDK's getters read it (Mario Kart 8 Deluxe's SDK 4.4: GetBirthday, GetGender and
+// GetCountry return the object at +0x00, +0x10 and +0x20, with the string's length from a bounded strlen of 16, 8 and 4): the birthday, the gender, and the country as
+// an ISO 3166-1 alpha-2 code, which PN_NEXTENDO_COUNTRY gives (Settings › Online › Country). The birthday and gender are left empty. Without PN_NEXTENDO_COUNTRY,
+// upstream's answer.
+PN_FORCE_BIG("_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAccountInfoERKNS0_10UserHandleEPvm", WHY ": the account's country (PN_NEXTENDO_COUNTRY)", Result, pn_acc_NaInfo, void *info, const void *u, void *buf, uint64_t n) {
+    const char *cc = getenv("PN_NEXTENDO_COUNTRY");
+    int ok = cc && strlen(cc) == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z';
+    static _Atomic int once;
+    if (ok && info) {
+        memset(info, 0, 0x24); memcpy((char *)info + 0x20, cc, 2);
+        if (!atomic_exchange(&once, 1)) LOG("online: account LoadCachedNintendoAccountInfo: country %s", cc);
+        return RES_OK;
+    }
     Result r = UP(Result (*)(void *, const void *, void *, uint64_t), "_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAccountInfoERKNS0_10UserHandleEPvm")(info, u, buf, n);
-    unsigned a, c; code_of(r, &a, &c); LOG("online: account LoadCachedNintendoAccountInfo -> %04u-%04u (upstream's: no Nintendo Account)", a, c); return r;
+    if (!atomic_exchange(&once, 1)) { unsigned a, c; code_of(r, &a, &c); LOG("online: account LoadCachedNintendoAccountInfo -> %04u-%04u (no PN_NEXTENDO_COUNTRY%s: upstream's answer)", a, c, cc && !ok ? " of two capital letters" : ""); }
+    return r;
 }
