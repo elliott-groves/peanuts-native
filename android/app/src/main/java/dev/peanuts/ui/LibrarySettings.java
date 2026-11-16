@@ -132,6 +132,7 @@ public final class LibrarySettings {
             return true;
         });
         refreshRows();
+        dev.peanuts.online.OnlineSettings.add(a, content);   // Settings › Online: Nextendo Network and its account
     }
 
     private static CharSequence companionsValue(Activity a) {

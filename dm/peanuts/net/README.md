@@ -57,17 +57,24 @@ The DNS redirect, the token layout and the ssl fixes follow citron-nextendo and
 reference only; none of its code is here. Prelude-Nextendo (PolyForm Shield) gives Nextendo's root CA certificate and its
 two server addresses: Nextendo's public data for its clients, not its code (none of that is here either).
 
-## The account (sign-in)
+## Your own Nextendo application (sign-in)
 
-The host takes the signed-in Nextendo account from `PN_NEXTENDO_PID` and `PN_NEXTENDO_TOKEN`. Sign in with your own Nextendo
-application, which you register once:
+Settings › Online signs in with OAuth 2.0 and PKCE (`dev.peanuts.online.Nextendo`): the password is only ever typed on
+nextendo.network, in the browser. The build carries no Nextendo application of its own; each builder registers one:
 
 1. Sign in on [nextendo.network](https://nextendo.network), open [Developers](https://nextendo.network/developers) and
    create an application: a **public application (desktop / mobile, PKCE)**, which has no secret.
 2. Give it a loopback redirect, `http://127.0.0.1:<port>/callback` with a fixed port of your choice (a registered
    application's redirect must match exactly), and the scopes `identity friends presence game.matchmaking`.
-3. `peanuts/scripts/nextendo-signin.py --client-id nxc_... --port <port>` signs in in the computer's browser and writes
-   `PN_ONLINE=1` and the account into the app's `env.txt` over adb, without printing them.
+3. Build with its public client ID and that port:
+   `./gradlew apk -PnxApp=peanuts -PnxNextendoClientId=nxc_... -PnxNextendoRedirectPort=<port> ...`
+
+A build without them shows "This build has no Nextendo application" in Settings › Online instead of signing in.
+The launcher hands `PN_ONLINE`, the account and the country to a verified game build's runs only (`Nextendo.VERIFIED`, the
+same list as the host's `g_verified`; `peanuts/tests/test_online_verified.py` keeps them the same): any other game starts
+offline and never gets the account. A game's own Game settings line `PN_ONLINE_UNVERIFIED=1` lets a developer try it.
+`peanuts/scripts/nextendo-signin.py --client-id nxc_... --port <port>` does the same sign-in from a computer and
+writes the account into the app's `env.txt` over adb (for testing the host side alone).
 
 ## Settings (`env.txt`)
 
@@ -78,7 +85,7 @@ application, which you register once:
 | `PN_NET_TRACE=1` | every socket and ssl call on the game's connections, with its result and the game's call site |
 | `PN_NEXTENDO_SERVER`, `PN_NEXTENDO_NAT` | the redirect's addresses (default: Nextendo Network's) |
 | `PN_NEXTENDO_PIN` | more server keys a redirected connection takes (SHA-256 of the SubjectPublicKeyInfo, 64 hex digits, comma-separated), for a Nextendo server whose self-signed key changed |
-| `PN_NEXTENDO_PID`, `PN_NEXTENDO_TOKEN` | the signed-in account (`peanuts/scripts/nextendo-signin.py` writes it); never logged |
+| `PN_NEXTENDO_PID`, `PN_NEXTENDO_TOKEN` | the signed-in account: Settings › Online hands it to each run (`peanuts/scripts/nextendo-signin.py` writes it from a computer); never logged |
 
 ## Status
 
@@ -86,7 +93,7 @@ application, which you register once:
   TLS 1.3 (certificate `CN=nintendo-private-server`; not verified then, see 2026-11-16), the WebSocket upgrade (`101 Switching
   Protocols`) and the login exchange. Without a signed-in account the server turns the login away (error
   2306-0805). Next: sign-in (a Nextendo client ID for Peanuts), then matchmaking and Pia's peer-to-peer.
-- 2026-11-13: signed in (with the launcher's sign-in that follows this change), Mario Kart 8 Deluxe logs in and reaches its
+- 2026-11-13: signed in from Settings › Online (`dev.peanuts.online.Nextendo`), Mario Kart 8 Deluxe logs in and reaches its
   online menu: the game-server session stays up, and Pia's NAT check gets its answers from both of Nextendo's
   responders (UDP, `MSG_DONTWAIT` as FreeBSD's 0x80).
 - 2026-11-13: with the friends calls answered (`pn_friends.c`: `DeclareOpenOnlinePlaySession`, `AddPlayHistory`, ...;
