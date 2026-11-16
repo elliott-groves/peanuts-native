@@ -75,6 +75,9 @@ typedef struct {
     mbedtls_ssl_context ssl; mbedtls_ssl_config conf;
     unsigned char peek[16384]; size_t npeek, opeek;  // Peek's data, handed out by the next Read
     uint64_t rx, tx;
+    char *cert_buf; uint32_t cert_cap, cert_size;    // SetServerCertBuffer's buffer, and the size of the server certificate the handshake put in it
+    char alpn[8][64]; const char *alpn_list[9];      // SetNextAlpnProto's protocols, offered at the handshake (NULL-terminated)
+    int alpn_asked;
 } conn_t;
 enum { MAXOBJ = 64 };
 static ctx_t *g_ctx[MAXOBJ]; static conn_t *g_conn[MAXOBJ];
@@ -128,6 +131,7 @@ static Result tls_setup(conn_t *c) {
     c->trust.redirected = rp != NULL;
     pn_trust_conf(&c->conf, &c->trust);
     mbedtls_ssl_conf_rng(&c->conf, pn_random, NULL);
+    if (c->alpn_list[0] && (r = mbedtls_ssl_conf_alpn_protocols(&c->conf, c->alpn_list))) { tls_err(c, "ALPN", r); return R_INTERNAL; }
     if ((r = mbedtls_ssl_setup(&c->ssl, &c->conf))) { tls_err(c, "setup", r); return R_INTERNAL; }
     const char *sni = server_name(c, rp ? red : NULL);
     if (sni && (r = mbedtls_ssl_set_hostname(&c->ssl, sni))) { tls_err(c, "server name", r); return R_INTERNAL; }
@@ -286,14 +290,65 @@ static Result cn_option(const void *self, int opt, int on) {
     else LOG("online: ssl %llu: option %d %s (taken, not used)", (unsigned long long)c->id, opt, on ? "on" : "off");
     return RES_OK;
 }
+// The server's certificate: with a buffer from SetServerCertBuffer, the handshake writes the server's own certificate (DER) into it, as Horizon's does without
+// GetServerCertChain (no game here asks for the chain: that format, magic "CertChMN", is not written). DoHandshake's size and count, and GetServerCertDetail,
+// describe it. The SDK's own GetServerCertDetail cannot: it reads the size and count from its Connection object, which the SDK's handshake fills and this one
+// never touches (Animal Crossing: New Horizons' libcurl, error 2219-1035 before any byte was sent).
+static Result cn_certbuf(const void *self, char *b, uint32_t n) {
+    CONN(self, c);
+    c->cert_buf = b; c->cert_cap = b ? n : 0; c->cert_size = 0;
+    TRACE("SetServerCertBuffer(%llu, %u bytes)", (unsigned long long)c->id, n);
+    return RES_OK;
+}
 static Result cn_handshake(const void *self, uint32_t *size, uint32_t *count) {
     CONN(self, c);
-    if (size) *size = 0;   // no server certificate is handed out (the game set no buffer for it here)
+    if (size) *size = 0;
     if (count) *count = 0;
     Result r = handshake(c);
     TRACE("DoHandshake(%llu) = %#x", (unsigned long long)c->id, r);
-    if (!r && count && mbedtls_ssl_get_peer_cert(&c->ssl)) *count = 1;
+    const mbedtls_x509_crt *crt = r ? NULL : mbedtls_ssl_get_peer_cert(&c->ssl);
+    if (crt && c->cert_buf && !c->cert_size) {
+        if (crt->raw.len <= c->cert_cap) { memcpy(c->cert_buf, crt->raw.p, crt->raw.len); c->cert_size = (uint32_t)crt->raw.len; }
+        else LOG("online: ssl %llu (%s): the server certificate (%zu bytes) does not fit the game's buffer (%u bytes)", (unsigned long long)c->id, c->host, crt->raw.len, c->cert_cap);
+    }
+    if (crt && size) *size = c->cert_size;
+    if (crt && count) *count = 1;
     return r;
+}
+typedef struct { uint32_t size; uint32_t pad; const char *der; } cert_detail_t;   // nn::ssl::Connection::ServerCertDetail (the SDK's GetServerCertDetail writes +0 and +8)
+static Result cn_certdetail(const void *self, cert_detail_t *out, const char *b, uint32_t index) {
+    CONN(self, c);
+    TRACE("GetServerCertDetail(%llu, index %u) = %u bytes", (unsigned long long)c->id, index, c->cert_size);
+    if (!out) return R_INTERNAL;
+    if (index != 0 || !c->cert_size) return R_INTERNAL;
+    out->size = c->cert_size; out->der = b ? b : c->cert_buf;
+    return RES_OK;
+}
+// ALPN: the game's protocols in TLS's wire form (each a length byte and the name), offered as they are. GetNextAlpnProto's state: 0 none offered, 1 agreed, 2 the
+// server took none of them.
+static Result cn_set_alpn(const void *self, const uint8_t *w, uint32_t n) {
+    CONN(self, c);
+    unsigned k = 0; char names[160] = "";
+    for (uint32_t i = 0; w && i < n && k < 8;) {
+        unsigned l = w[i++];
+        if (!l || i + l > n || l >= sizeof c->alpn[0]) break;
+        memcpy(c->alpn[k], w + i, l); c->alpn[k][l] = 0; c->alpn_list[k] = c->alpn[k];
+        snprintf(names + strlen(names), sizeof names - strlen(names), "%s%s", k ? ", " : "", c->alpn[k]);
+        k++; i += l;
+    }
+    c->alpn_list[k] = NULL; c->alpn_asked = k > 0;
+    LOG("online: ssl %llu: ALPN offers %s", (unsigned long long)c->id, k ? names : "nothing");
+    return RES_OK;
+}
+static Result cn_get_alpn(const void *self, uint32_t *state, uint8_t *out, uint32_t *len, uint32_t cap) {
+    CONN(self, c);
+    const char *p = c->handshaken ? mbedtls_ssl_get_alpn_protocol(&c->ssl) : NULL;
+    uint32_t n = 0;
+    if (p && out) { n = (uint32_t)strlen(p); if (n > cap) n = cap; memcpy(out, p, n); }
+    if (state) *state = p ? 1 : c->alpn_asked ? 2 : 0;
+    if (len) *len = n;
+    TRACE("GetNextAlpnProto(%llu) = %s", (unsigned long long)c->id, p ? p : "(none)");
+    return RES_OK;
 }
 static Result cn_poll(const void *self, uint32_t *out, const uint32_t *in, uint32_t ms) {
     CONN(self, c);
@@ -350,6 +405,10 @@ PN_FORCE_BIG("_ZN2nn3ssl10Connection11DoHandshakeEv", WHY, Result, pn_ssl_Handsh
 PN_FORCE_BIG("nnsslConnectionDoHandshake", WHY, Result, pn_ssl_Handshake0_c, const void *s) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_handshake(s, NULL, NULL); }
 BOTH("_ZN2nn3ssl10Connection11DoHandshakeEPjS2_", "nnsslConnectionDoHandshakeWithCertBuffer", Result, pn_ssl_Handshake2, const void *s, uint32_t *sz, uint32_t *n) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_handshake(s, sz, n); }
 PN_FORCE_BIG("_ZN2nn3ssl10Connection11DoHandshakeEPjS2_Pcj", WHY, Result, pn_ssl_Handshake4, const void *s, uint32_t *sz, uint32_t *n, char *b, unsigned bn) { (void)b; (void)bn; return cn_handshake(s, sz, n); }
+BOTH("_ZN2nn3ssl10Connection19SetServerCertBufferEPcj", "nnsslConnectionSetServerCertBuffer", Result, pn_ssl_CertBuf, const void *s, char *b, unsigned n) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_certbuf(s, b, n); }
+BOTH("_ZNK2nn3ssl10Connection19GetServerCertDetailEPNS1_16ServerCertDetailEPKcj", "nnsslConnectionGetServerCertDetail", Result, pn_ssl_CertDetail, const void *s, cert_detail_t *o, const char *b, unsigned i) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_certdetail(s, o, b, i); }
+BOTH("_ZN2nn3ssl10Connection16SetNextAlpnProtoEPKhj", "nnsslConnectionSetNextAlpnProto", Result, pn_ssl_SetAlpn, const void *s, const uint8_t *w, unsigned n) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_set_alpn(s, w, n); }
+BOTH("_ZN2nn3ssl10Connection16GetNextAlpnProtoEPNS1_14AlpnProtoStateEPhPjj", "nnsslConnectionGetNextAlpnProto", Result, pn_ssl_GetAlpn, const void *s, uint32_t *st, uint8_t *o, uint32_t *l, unsigned cap) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_get_alpn(s, st, o, l, cap); }
 BOTH("_ZN2nn3ssl10Connection4ReadEPcPij", "nnsslConnectionRead", Result, pn_ssl_Read, const void *s, char *b, int *o, unsigned n) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_read(s, b, o, n); }
 BOTH("_ZN2nn3ssl10Connection5WriteEPKcPij", "nnsslConnectionWrite", Result, pn_ssl_Write, const void *s, const char *b, int *o, unsigned n) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_write(s, b, o, n); }
 BOTH("_ZN2nn3ssl10Connection4PeekEPcPij", "nnsslConnectionPeek", Result, pn_ssl_Peek, const void *s, char *b, int *o, unsigned n) { t_ra = dm_bigstack_caller(__builtin_return_address(0)); return cn_peek(s, b, o, n); }

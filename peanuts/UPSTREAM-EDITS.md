@@ -1180,3 +1180,15 @@ Upstream candidate: no (Peanuts' online play).
 | `android/app/build.gradle` | 2 | `-PnxNextendoClientId` / `-PnxNextendoRedirectPort` (the builder's own Nextendo application) into `BuildConfig` | `// PEANUTS` on each line |
 
 Upstream candidate: no.
+
+### Round 22, online play on Nextendo Network: Animal Crossing: New Horizons (2026-11-16)
+
+Animal Crossing links its own client of `npns:u` (push notifications) and connects to it once it is online; upstream's `hle_sf.c` serves only the
+names in `sf_served`, with zeroed answers, and refuses the rest. `dm/peanuts/net/pn_npns.c` answers `npns:u` while `PN_ONLINE=1`, through one export.
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `dm/host/hle_sf.c` | 1 | `pn_sf_session(name, answer)`: a host session (`sf_new`) whose commands `answer` answers, as the camera's are | `// PEANUTS:` |
+| `dm/host/hle.h` | 1 | its declaration | `// PEANUTS:` |
+
+Upstream candidate: no (Peanuts' online play).
