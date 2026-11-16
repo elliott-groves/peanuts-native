@@ -1396,3 +1396,16 @@ The Trinity reader in `dm/gfx/tools/shader_split.py` narrows a recognized build 
 | `dm/games/0100B8E016F76000/game.tsv`, `dm/games/0100B8E016F76000/README.md` | 2, 1 | NieR:Automata (Asian release) on Android: `depth_mode zero` as the global profile; frame limits 30 to 60 measured on an AYN Thor; the note's Android section | `PEANUTS` |
 | `dm/games/0100B8E016F76000/vk_prewarm.bin` | new | its Turnip prewarm seed (225 keys) | allow-listed in `peanuts/upstream-unmarked.txt` |
 | `README.md`, `peanuts/docs/README.github.md` | 1 + 1 each | the game's table row and its paragraph under Upcoming in 0.1.6 | inside the files' `PEANUTS` sections |
+
+### Round 20, online play on Nextendo Network: the host (2026-11-16)
+
+`dm/peanuts/net` serves the network, ssl, account and friends calls while `PN_ONLINE=1` (`dm/peanuts/net/README.md`), from a hook table of its own
+(`pnforce`): upstream's `swforce` table cannot hold a second entry of a name, so the online hooks are asked first instead.
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `dm/host/loader.c` | 1 | `force_lookup` asks `pn_force_lookup` first, Android's host only (`#if PLAT_ANDROID`); it answers NULL unless `PN_ONLINE=1` | `// PEANUTS:` |
+| `android/host/CMakeLists.txt` | 1 | `dm/peanuts/net/*.c` and Mbed TLS (`dm/peanuts/third_party/mbedtls/library/*.c`, `-O2 -w`) in `HOST_C`, with their include folders and `MBEDTLS_USER_CONFIG_FILE` | `# PEANUTS:` on each line |
+| `android/app/src/main/cpp/nxlaunch.c` | 1 | the env log line prints `(hidden)` for `PN_NEXTENDO_PID` and `PN_NEXTENDO_TOKEN` | `// PEANUTS:` |
+
+Upstream candidate: no (Peanuts' online play).
