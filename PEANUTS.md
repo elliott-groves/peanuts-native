@@ -19,6 +19,7 @@ Banana Native ships several releases a day, so this fork is kept as a **thin ove
    - `android/app/src/main/cpp/nxlaunch.c` — JNI entry points forwarded to `dm/peanuts`; the run's env log line hides the Nextendo account (`PN_NEXTENDO_PID`, `PN_NEXTENDO_TOKEN`).
    - `android/host/CMakeLists.txt`, `android/app/src/main/cpp/CMakeLists.txt` — add the `dm/peanuts` sources.
    - `dm/host/loader.c` — `force_lookup` asks `dm/peanuts/net` first (`pn_force_lookup`, Android only), so its online hooks win while `PN_ONLINE=1`.
+   - `dm/host/hle_sf.c`, `dm/host/hle.h` — `pn_sf_session`: a host service session whose commands `dm/peanuts/net` answers (`npns:u` online, `pn_npns.c`).
    - `dm/gfx/vk_android/vka_present.c` — one call per presented frame (`peanuts_tick()`), beside `ovl_draw`.
    - `android/app/build.gradle` — applicationId / label (`-PnxAppId=<suffix>`: a development build beside the app, with its own data); the Nextendo
      application (`-PnxNextendoClientId`, `-PnxNextendoRedirectPort`: `dm/peanuts/net/README.md`).

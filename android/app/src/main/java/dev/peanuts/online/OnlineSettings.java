@@ -91,7 +91,7 @@ public final class OnlineSettings {
 
     private static void refresh(Activity a) {
         if (onlineRow == null || accountRow == null) return;
-        onlineRow.value(Nextendo.online(a) ? "On: games verified for it go online on Nextendo Network (Mario Kart 8 Deluxe so far); the others stay offline" : "Off: games stay offline");
+        onlineRow.value(Nextendo.online(a) ? "On: games verified for it go online on Nextendo Network (Mario Kart 8 Deluxe 4.0.1 and Animal Crossing: New Horizons 3.0.3 so far); the others stay offline" : "Off: games stay offline");
         if (nameRow != null) { String n = Nextendo.playerName(a); nameRow.value((n == null ? "Player" : n) + (Nextendo.playerNameChosen(a) ? "" : n == null ? " (the default)" : " (your Nextendo name)")); }
         if (countryRow != null) { String cc = Nextendo.country(a); countryRow.value(cc == null ? "None (no flag)" : Nextendo.countryName(cc) + (Nextendo.countryChosen(a) ? "" : " (the phone's)")); }
         String user = Nextendo.username(a);
