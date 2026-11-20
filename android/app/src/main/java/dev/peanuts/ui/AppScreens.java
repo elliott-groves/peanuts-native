@@ -21,6 +21,7 @@ public final class AppScreens {
 
     /** NxApp.onCreate (PEANUTS hook), every process. Pages in another process than the launcher's tell BottomScreen when they come and go */
     public static void install(Application app) {
+        dev.peanuts.Bundled.init(app);   // every process: the companion packages built into the APK (dev.peanuts.Bundled)
         String p = Application.getProcessName();
         if (p == null || p.equals(app.getPackageName()) || p.endsWith(":game")) return;   // the launcher sees its own; a game has GameScreen
         app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
