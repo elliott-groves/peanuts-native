@@ -2,7 +2,7 @@
 
 Games go online on [Nextendo Network](https://nextendo.network), the community replacement for Nintendo's online
 services. Off unless `PN_ONLINE=1` is in the host's environment (`env.txt`), and then only for a game build it is verified
-on: `g_verified` in `pn_net.c`, by main's build ID (today Mario Kart 8 Deluxe 4.0.1 and Animal Crossing: New Horizons 3.0.3).
+on: `g_verified` in `pn_net.c`, by main's build ID (today Mario Kart 8 Deluxe 4.0.1, Animal Crossing: New Horizons 3.0.3 and Super Smash Bros. Ultimate 13.0.5).
 Any other game stays offline with a
 `[RED]` line until it is tried with `PN_ONLINE_UNVERIFIED=1` and added there. Off, every network call keeps
 upstream's offline answers (`dm/host/hle_net.c`, `hle_offline.c`, `hle_account.c`). Upstream's local wireless over IP (`DM_COOP`,
@@ -20,7 +20,7 @@ code is left as the rewriter leaves it; what changes is the system it calls.
 | `pn_ssl.c` | `nn::ssl` and the `nnssl*` C interface on Mbed TLS (`dm/peanuts/third_party/mbedtls`), with the server certificate buffer and ALPN that the SDK's libcurl uses |
 | `pn_npns.c` | `npns:u`, push notifications, as a console whose push channel never delivers anything (a session of upstream's `hle_sf.c`, through its `pn_sf_session` hook) |
 | `pn_trust.c`, `pn_nextendo_ca.h` | which server certificates a connection trusts (below); Nextendo Network's published root CA |
-| `pn_account.c` | the network service account as the Nextendo account (PID, id_token); the error applet on the host stack |
+| `pn_account.c` | the network service account as the Nextendo account (PID, id_token with the game's installed version in `tv`); the error applet on the host stack |
 | `pn_friends.c` | the friends calls a game makes around online play: they succeed and change nothing |
 | `pn_mbedtls_config.h` | Mbed TLS's threading, for the library and this folder alike |
 
@@ -92,6 +92,7 @@ writes the account into the app's `env.txt` over adb (for testing the host side 
 | `PN_ONLINE=1` | online on, for the verified game builds |
 | `PN_ONLINE_UNVERIFIED=1` | with `PN_ONLINE=1`: online on for any game, to try one that is not verified yet |
 | `PN_NET_TRACE=1` | every socket and ssl call on the game's connections, with its result and the game's call site |
+| `PN_NET_DUMP=1` | the bytes of each TLS read and write (hex and text, the first 2 KB of each, 64 a connection), WebSocket frames unmasked; runs of 24 or more token characters are blanked, so the id_token and the game token never reach the log |
 | `PN_NEXTENDO_SERVER`, `PN_NEXTENDO_NAT` | the redirect's addresses (default: Nextendo Network's) |
 | `PN_NEXTENDO_PIN` | more server keys a redirected connection takes (SHA-256 of the SubjectPublicKeyInfo, 64 hex digits, comma-separated), for a Nextendo server whose self-signed key changed |
 | `PN_NEXTENDO_COUNTRY` | the account's country, an ISO 3166-1 alpha-2 code (`US`, `GB`, ...): Mario Kart 8 Deluxe's flag (Settings › Online › Country) |
@@ -130,6 +131,15 @@ writes the account into the app's `env.txt` over adb (for testing the host side 
   fills, so it is answered here too); once online the game connects to `npns:u` itself and aborted on upstream's "not registered";
   the typed `addrinfo` above; and the island services' own self-signed key, pinned. Mario Kart 8 Deluxe 4.0.1 online again
   afterwards: the same sign-in, NAT check and races (5.7 MB of Pia traffic each way), and the same `[RED]` lines as before.
+- 2026-11-20, on the AYN Thor with Super Smash Bros. Ultimate 13.0.5 (tried with `PN_ONLINE_UNVERIFIED=1`): two things stood in the way, each fixed here.
+  Its game server, `g23380901-lp1.s.n.srv.nintendo.net` (on `51.178.29.194`), presents a self-signed key of its own (`d2e7388e…b30e`), now pinned: before, the
+  handshake was refused and the game showed 2306-0502. Then its login answered `Authentication::ApplicationVersionIsOld` (`0x80680013`, the game's 2306-0819):
+  Nextendo's NEX core reads the installed game version from the id_token's `tv` claim ([developer reference](https://wiki.nextendo.network/developers),
+  "The BAAS id_token built by the emulator") and refuses any but the version it serves; the host's token had none. `tv` is now the profile's display version
+  for this exact main (as `GetDisplayVersion` answers it), left out for a build the profile does not know. Mario Kart 8 Deluxe 4.0.1 and Animal Crossing 3.0.3
+  were taken without it; they get it now too. With both fixes (verified, no extra lines) it signs in, passes Pia's NAT check (both of Nextendo's responders) and
+  plays an online battle (about 345 KB of Pia traffic each way), with no certificate refused and no error. Open: Battle Arenas not tried; Smash's BCAT data is
+  not served (Nextendo: without it the main menu's banner asks to connect to the Internet).
 - Open (Animal Crossing): visiting another island is not tested (it needs another player). Nextendo has no push server, so
   best-friend messages and requests show only when the game reads its lists again. The network service account ID is the
   Nextendo PID; ACNHRecomp gives the account's `baasUserID` (`nsa` of `/api/me`), which friend lists match on. The SDK's libcurl

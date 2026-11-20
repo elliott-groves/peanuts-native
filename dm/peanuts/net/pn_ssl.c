@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
+#include <ctype.h>
 #include <mbedtls/error.h>
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/ssl.h>
@@ -75,6 +76,7 @@ typedef struct {
     mbedtls_ssl_context ssl; mbedtls_ssl_config conf;
     unsigned char peek[16384]; size_t npeek, opeek;  // Peek's data, handed out by the next Read
     uint64_t rx, tx;
+    unsigned dumps;   // PN_NET_DUMP lines so far
     char *cert_buf; uint32_t cert_cap, cert_size;    // SetServerCertBuffer's buffer, and the size of the server certificate the handshake put in it
     char alpn[8][64]; const char *alpn_list[9];      // SetNextAlpnProto's protocols, offered at the handshake (NULL-terminated)
     int alpn_asked;
@@ -170,6 +172,43 @@ static void first_line(const char *what, conn_t *c, const char *b, size_t n, int
     if (request ? (!memcmp(b, "GET ", 4) || !memcmp(b, "POST ", 5) || !memcmp(b, "PUT ", 4) || !memcmp(b, "DELETE ", 7)) : !memcmp(b, "HTTP/", 5))
         LOG("online: ssl %llu %s %s: %.*s", (unsigned long long)c->id, what, c->host, (int)k, b);
 }
+// PN_NET_DUMP=1: the bytes of each read and write (hex and text, 32 a line, the first 2 KB of each, 64 a connection), to see what a game and a server say
+// to each other. A run of 24 or more token characters (base64, base64url, JWT) is blanked to '*': the id_token and the Nextendo game token travel in these
+// exchanges and must never reach a log. A WebSocket frame the client masks (NEX over WebSocket: every frame the game sends) is shown unmasked, so the
+// blanking sees its text: masked, the token would reach the log in a form anyone can undo.
+static int dump_on(void) { static _Atomic int v = -1; int x = atomic_load(&v); if (x < 0) { const char *e = getenv("PN_NET_DUMP"); x = e && e[0] == '1'; atomic_store(&v, x); } return x; }
+static void dump(conn_t *c, const char *dir, const unsigned char *b, size_t n) {
+    if (!dump_on() || !n || c->dumps >= 64) return;
+    c->dumps++;
+    size_t m = n < 2048 ? n : 2048;
+    unsigned char *secret = calloc(m, 1), *u = malloc(m); if (!secret || !u) { free(secret); free(u); return; }
+    memcpy(u, b, m);
+    // A masked WebSocket frame (RFC 6455 5.2): FIN and opcode, then MASK with a 7-bit length (126: 16 bits follow, 127: 64 bits), then the 4-byte key
+    if (m >= 6 && (u[0] & 0x70) == 0 && (u[1] & 0x80)) {
+        size_t len = u[1] & 0x7f, at = 2;
+        if (len == 126) at = 4; else if (len == 127) at = 10;
+        if (m >= at + 4) { const unsigned char *k = b + at; at += 4; for (size_t i = at; i < m; i++) u[i] ^= k[(i - at) & 3]; }
+    }
+    b = u;
+    for (size_t i = 0; i < m;) {
+        size_t j = i;
+        while (j < m && (isalnum(b[j]) || b[j] == '+' || b[j] == '/' || b[j] == '=' || b[j] == '-' || b[j] == '_' || b[j] == '.')) j++;
+        if (j - i >= 24) memset(secret + i, 1, j - i);
+        i = j > i ? j : i + 1;
+    }
+    LOG("online: dump ssl %llu %s %zu bytes (%s)", (unsigned long long)c->id, dir, n, c->host);
+    for (size_t o = 0; o < m; o += 32) {
+        char hexs[32 * 3 + 1], txt[33]; size_t k = 0;
+        for (size_t i = 0; i < 32 && o + i < m; i++, k++) {
+            unsigned char ch = b[o + i]; int sec = secret[o + i];
+            snprintf(hexs + i * 3, 4, sec ? "** " : "%02x ", ch);
+            txt[i] = sec ? '*' : (ch >= 0x20 && ch < 0x7f ? (char)ch : '.');
+        }
+        hexs[k * 3] = 0; txt[k] = 0;
+        LOG("online: dump %04zx  %-96s %s", o, hexs, txt);
+    }
+    free(secret); free(u);
+}
 static Result tls_read(conn_t *c, char *b, int *out, unsigned n, int peek) {
     if (out) *out = 0;
     if (!c->handshaken) { Result r = handshake(c); if (r) return r; }
@@ -183,6 +222,7 @@ static Result tls_read(conn_t *c, char *b, int *out, unsigned n, int peek) {
         int r = mbedtls_ssl_read(&c->ssl, peek ? c->peek : (unsigned char *)b, peek ? sizeof c->peek : n);
         if (r > 0) {
             if (!c->rx) first_line("answer from", c, peek ? (char *)c->peek : b, (size_t)r, 0);
+            dump(c, "read", peek ? c->peek : (unsigned char *)b, (size_t)r);
             c->rx += (uint64_t)r;
             if (peek) { c->npeek = (size_t)r; c->opeek = 0; if ((unsigned)r > n) r = (int)n; memcpy(b, c->peek, (size_t)r); }
             if (out) *out = r; return c->last = RES_OK;
@@ -198,7 +238,7 @@ static Result tls_write(conn_t *c, const char *b, int *out, unsigned n) {
     if (!c->handshaken) { Result r = handshake(c); if (r) return r; }
     for (;;) {
         int r = mbedtls_ssl_write(&c->ssl, (const unsigned char *)b, n);
-        if (r >= 0) { if (!c->tx) first_line("request to", c, b, (size_t)r, 1); c->tx += (uint64_t)r; if (out) *out = r; return c->last = RES_OK; }
+        if (r >= 0) { if (!c->tx) first_line("request to", c, b, (size_t)r, 1); dump(c, "write", (const unsigned char *)b, (size_t)r); c->tx += (uint64_t)r; if (out) *out = r; return c->last = RES_OK; }
         if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) { if (nonblocking(c)) return c->last = R_WOULD_BLOCK; continue; }
         tls_err(c, "write", r); return c->last = R_INTERNAL;
     }

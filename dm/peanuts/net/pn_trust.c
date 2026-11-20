@@ -4,7 +4,7 @@
 //   publishes for its clients (pn_nextendo_ca.h): its account and NAT-check servers present certificates it issued, with their host names (checked 2026-11-16).
 // - Nextendo's game servers still present a self-signed certificate with no host name (CN=nintendo-private-server; Mario Kart 8 Deluxe's
 //   g2b309e01-lp1.s.n.srv.nintendo.net on both of Nextendo's addresses; Animal Crossing: New Horizons' api.hac.lp1.acbaa.srv.nintendo.net with a key of its own,
-//   checked 2026-11-16), which no CA can vouch for. A redirected connection alone also takes a server
+//   checked 2026-11-16; Super Smash Bros. Ultimate's g23380901-lp1.s.n.srv.nintendo.net with another, checked 2026-11-20), which no CA can vouch for. A redirected connection alone also takes a server
 //   whose public key is one of the pinned keys below (SHA-256 of its SubjectPublicKeyInfo), or of PN_NEXTENDO_PIN's (64 hex digits each, comma-separated),
 //   whatever its name: the key is the identity there. Nothing else is accepted on a redirected connection.
 // - Every other connection trusts the phone's system CAs (Android's conscrypt store), as an app's would. The redirect's exception never applies to it.
@@ -24,6 +24,7 @@
 static const char *const g_default_pins[] = {
     "770551f13152f3d55370de6c039d3859cff0d39882f27c6c9fc6cfdb327d74b8",   // CN=nintendo-private-server, RSA-2048, self-signed (2026-07-13 to 2036-07-10): Mario Kart 8 Deluxe's game server
     "02baa0f93c8d4f9ccf2791b4cac820e04ae7ca2fd461d73b81619e34ff95b925",   // CN=nintendo-private-server, RSA-2048, self-signed (2026-07-18 to 2036-07-15): Animal Crossing's island services, api.hac.lp1.acbaa.srv.nintendo.net
+    "d2e7388e48ee30cfbecfbeb522874f2cc6b85f7aa1105c57669f3c2aa85fb30e",   // CN=nintendo-private-server, self-signed (2026-06-22 to 2036-06-19): Super Smash Bros. Ultimate's game server, g23380901-lp1.s.n.srv.nintendo.net on 51.178.29.194 (checked 2026-11-20)
 };
 static const char *const g_android_dirs[] = {"/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts", NULL};
 static const char *const *g_dirs = g_android_dirs;

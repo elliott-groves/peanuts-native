@@ -43,6 +43,7 @@ int dm_sk_select(int nfds, const uint64_t *r, const uint64_t *w, const uint64_t 
 static const struct { const char *main, *what; } g_verified[] = {
     {"158c0c7399aabd7bf83795c2ef3484c7", "Mario Kart 8 Deluxe 4.0.1"},
     {"ff1d1c05670db6021c85b624a710b963", "Animal Crossing: New Horizons 3.0.3"},
+    {"21450c647b8c5940ed5b68218ea128fd", "Super Smash Bros. Ultimate 13.0.5"},
 };
 static const char *verified(const char *build) {
     for (unsigned i = 0; i < sizeof g_verified / sizeof *g_verified; i++) if (!strcasecmp(build, g_verified[i].main)) return g_verified[i].what;
