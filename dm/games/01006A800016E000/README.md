@@ -67,6 +67,7 @@ General host changes first needed here; each applies to every game:
 - **Function-matched patches of several functions, and the pack-time report of what an unregistered build kept** (`nso_match.py` `match_patch`, `<module>.match.tsv`, `report_fix_coverage`): [Function-matched cuts for unregistered builds](../../../docs/reference/rewriter.md#function-matched-cuts-for-unregistered-builds).
 - **The address region table and the NSP script's region check** (`patch_nso.py` "Address regions", `hle_svc.c`, `DM_REGIONS`): its engine region, 4 GB through `nn::os::AllocateAddressRegion`, returning to `main+0x37c9a64` (its constructor's call), opened up to 14 MB below its end: [Measuring address regions and commits](../../../docs/reference/memory.md#measuring-address-regions-and-commits).
 - **A crash in the game's sort of command buffers at the menus** (`main+0x385201c`, its comparator calls `GetCommandMemorySize` while other threads record): [`GetCommandMemorySize` read while another thread records](../../../docs/reference/nvn-objects.md#getcommandmemorysize-read-while-another-thread-records).
+- **Online play on Nextendo Network (13.0.5)**: its game server's own pinned key and the id_token's installed version (`tv`), without which its login was refused as `ApplicationVersionIsOld` (2306-0819): [dm/peanuts/net, Status](../../peanuts/net/README.md#status). Its BCAT data is not served yet (open).
 
 ## Open
 

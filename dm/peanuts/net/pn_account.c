@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/md.h>
@@ -72,7 +73,25 @@ static void key_init(void) {   // RSA-2048, made once per run (a second or two o
     LOG("online: account: id_token signing key %s (%lld ms)", g_key_ok ? "made" : "[RED] could not be made", (long long)((b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000));
 }
 
-// The id_token: header and claims as Ryujinx-Nextendo / citron-nextendo / Lemon make them
+// The game's installed display version ("13.0.5"), for the id_token's "tv" claim: the profile's build row for this exact main, as nn::oe::GetDisplayVersion
+// answers it (hle_sdk16.c), but with no "1.0.0" fallback: an unknown build gets no claim rather than a wrong one. NULL then.
+static const char *installed_version(void) {
+    const char *v = NULL, *bid = dm_main_build();
+#ifdef DM_RUNTIME_PROFILE
+    for (unsigned j = 0; j < g_profile.ndisplay_versions; j++) if (!strcasecmp(bid, g_profile.display_versions[j].build)) v = g_profile.display_versions[j].ver;
+#elif defined(DM_GAME_DISPLAY_VERSIONS)
+    static const struct { const char *build, *ver; } k[] = {DM_GAME_DISPLAY_VERSIONS};
+    for (unsigned j = 0; j < sizeof k / sizeof *k; j++) if (!strcasecmp(bid, k[j].build)) v = k[j].ver;
+#endif
+    if (!v || !*v || strlen(v) > 15) return NULL;
+    for (const char *c = v; *c; c++) if (!((*c >= '0' && *c <= '9') || *c == '.')) return NULL;   // digits and dots: it goes into JSON unescaped
+    return v;
+}
+
+// The id_token: header and claims as Nextendo's developer reference lists them (wiki.nextendo.network/developers, "The BAAS id_token built by the emulator"),
+// the layout of Ryujinx-Nextendo / citron-nextendo / Lemon. "tv" is the installed display version: Nextendo's NEX core reads it from the login's extra data
+// and refuses a login without the exact version it serves the game at (Super Smash Bros. Ultimate: Authentication::ApplicationVersionIsOld, 0x80680013,
+// shown as 2306-0819; Mario Kart 8 Deluxe 4.0.1 and Animal Crossing 3.0.3 were taken without it).
 static int make_token(char *out, size_t cap) {
     pthread_once(&g_id_once, id_init); pthread_once(&g_key_once, key_init);
     if (!g_key_ok) return -1;
@@ -81,12 +100,15 @@ static int make_token(char *out, size_t cap) {
     char sub[33], di[33], bsdid[33], jti[37], r[33];
     hex(sub, 16); hex(di, 16); hex(bsdid, 16); hex(r, 16);
     snprintf(jti, sizeof jti, "%.8s-%.4s-4%.3s-a%.3s-%.12s", r, r + 8, r + 12, r + 15, r + 18);
+    const char *tv = installed_version();
+    static _Atomic int tv_logged;
+    if (!atomic_exchange(&tv_logged, 1)) LOG("online: account: id_token's installed version (tv) %s", tv ? tv : "[RED] not known for this build: left out");
     char head[256], *body = malloc(4096); if (!body) return -1;
     snprintf(head, sizeof head, "{\"alg\":\"RS256\",\"kid\":\"nextendo-baas-key-1\",\"typ\":\"id_token\",\"jku\":\"%s\"}", jku);
     snprintf(body, 4096, "{\"sub\":\"%s\",\"aud\":\"ed9e2f05d286f7b8\",\"iss\":\"%s\",\"typ\":\"id_token\",\"iat\":%lld,\"exp\":%lld,\"jku\":\"%s\",\"jti\":\"%s\","
              "\"di\":\"%s\",\"sn\":\"XAW10000000000\",\"bs:did\":\"%s\",\"hm\":true,"
-             "\"nintendo\":{\"dt\":\"NX Prod 1\",\"pc\":\"HAC\",\"di\":\"%s\",\"sn\":\"XAW10000000000\",\"ist\":false},\"nnex\":\"%s\"}",
-             sub, iss, now, now + 3 * 60 * 60, jku, jti, di, bsdid, di, g_nex);
+             "\"nintendo\":{\"dt\":\"NX Prod 1\",\"pc\":\"HAC\",\"di\":\"%s\",\"sn\":\"XAW10000000000\",\"ist\":false},%s%s%s\"nnex\":\"%s\"}",
+             sub, iss, now, now + 3 * 60 * 60, jku, jti, di, bsdid, di, tv ? "\"tv\":\"" : "", tv ? tv : "", tv ? "\"," : "", g_nex);
     size_t k = b64url((const unsigned char *)head, strlen(head), out, cap);
     if (!k || k + 2 >= cap) { free(body); return -1; }
     out[k++] = '.';

@@ -127,6 +127,7 @@ public final class Nextendo {
     static final String[][] VERIFIED = {
         {"158c0c7399aabd7bf83795c2ef3484c7", "Mario Kart 8 Deluxe 4.0.1"},
         {"ff1d1c05670db6021c85b624a710b963", "Animal Crossing: New Horizons 3.0.3"},
+        {"21450c647b8c5940ed5b68218ea128fd", "Super Smash Bros. Ultimate 13.0.5"},
     };
     /** What a game's own env lines (Prefs.gameEnv: PN_BUILD_ID, from the folder scan) say: its verified name, "" for a build tried with PN_ONLINE_UNVERIFIED=1, null for no online play */
     static String verified(String gameEnv) {
