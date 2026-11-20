@@ -340,8 +340,15 @@ int main(void) {
         P(nvnCommandBufferAddControlMemory)(&c2, ctl, sizeof ctl);
         EXPECT("control block size after grant", sizeof ctl, P(nvnCommandBufferGetControlMemorySize)(&c2));
         EXPECT("control block free after grant", sizeof ctl, P(nvnCommandBufferGetControlMemoryFree)(&c2));
-        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m);
+        // GetCommandMemorySize is the memory last added, fixed while commands are recorded (a stored value, as on NVN: Super Smash Bros. Ultimate sorts
+        // command buffers by it while other threads record into them), and still used + free
+        EXPECT("command memory size: the block added", sizeof m, P(nvnCommandBufferGetCommandMemorySize)(&c2));
+        P(nvnCommandBufferBeginRecording)(&c2);
         P(nvnCommandBufferDrawElementsBaseVertex)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, NVN_INDEX_TYPE_UNSIGNED_SHORT, 36, 0x10000, 5);
+        EXPECT("command memory size unchanged by recording", sizeof m, P(nvnCommandBufferGetCommandMemorySize)(&c2));
+        EXPECT("command memory size = used + free", P(nvnCommandBufferGetCommandMemorySize)(&c2),
+               P(nvnCommandBufferGetCommandMemoryUsed)(&c2) + P(nvnCommandBufferGetCommandMemoryFree)(&c2));
         NVNcommandHandle hd = P(nvnCommandBufferEndRecording)(&c2);
         EXPECT("plain indexed draw recording: 0x28 + END", 0x30, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));
         EXPECT("recording uses no control memory", 0, P(nvnCommandBufferGetControlMemoryUsed)(&c2));

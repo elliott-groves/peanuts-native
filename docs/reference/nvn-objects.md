@@ -268,6 +268,14 @@ Games read this count as a position in their own command memory and size their h
 - **Check:** Super Mario Bros. Wonder and Super Mario Odyssey checked unchanged after the reset.
 - **Found on:** [Fire Emblem: Three Houses](../../dm/games/010055D009F78000/README.md) (the count from `AddCommandMemory`); [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md) (host segments counted).
 
+### `GetCommandMemorySize` read while another thread records
+
+- **Symptom:** `CRASH sig=11 addr=0x50` in the game's own code, inside a `std::sort` (an unguarded partition loop `ldr x8, [xN, #-8]!` / `ldr x0, [x8, #0x10]`), the walking pointer one slot below the array's first element. On Super Smash Bros. Ultimate: `pc=main+0x385201c`, 19 s in, at the menus, once in three runs.
+- **Cause:** the sort's comparator orders objects by `nvnCommandBufferGetCommandMemorySize` of their command buffer (`[main+0x5941428]`, the game's NVN function table: `nvnthf_360`), while the game's worker threads record into those buffers. On NVN the size is the command memory last added and changes only at `AddCommandMemory`; the host computed it at each call as used + free, `used + (end - cur)`, and a record moves `cur` and `used` in two separate stores (`cmd_alloc_keep`). A thread reading between them saw the size drop by that record's size and come back, so the comparator was not a consistent order, and an unguarded partition loop that relies on one ran off the array.
+- **Fix** (`hle_nvn.c`, `nvn_obj.h`): `cmd_t.mem_size` is stored at every segment switch (`AddCommandMemory`, and a host-lent segment, `cmd_new_segment`) as used + free at that moment, with one atomic store, and `GetCommandMemorySize` returns it. The values are the same as before between records (used + free does not change while recording into one segment); only the transient ones are gone. `t_nvn` checks the size after `AddCommandMemory`, after a record, and that it still equals used + free.
+- **Check:** open: the fix runs on the phone; `t_nvn` needs a Mac (Metal) and has not run here.
+- **Found on:** [Super Smash Bros. Ultimate](../../dm/games/01006A800016E000/README.md) (13.0.5).
+
 ### Prerecorded lists in slots of their measured size
 
 - **Symptom:** `CRASH sig=10` in `mtl_exec` after minutes of play, the fault address equal to `x19` and shaped like `0x1000000003`.
