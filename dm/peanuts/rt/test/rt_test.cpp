@@ -26,6 +26,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <mutex>
@@ -466,12 +467,17 @@ int RunModuleMode(int argc, char** argv) {
     // module's standby page names romfs:...bctex textures); the remaining arguments are page ids.
     // Runtime 25: `--panel <w>x<h>` sets the second screen's size in pixels (default 1240x1080), so
     // a package with canvas_alt can be drawn on a portrait or a narrow panel and @screen.* read.
+    // PEANUTS: `--main <file>` fills the fake main module with that image (at least 32 MiB, longer when
+    // the file is), for a module that reads main's own exports and code (Super Smash Bros. Ultimate's).
     const char* romfs_dir = nullptr;
+    const char* main_image = nullptr;
     unsigned panel_w = 1240, panel_h = 1080;
     std::vector<const char*> pages;
     for (int i = 6; i < argc; ++i) {
         if (std::strcmp(argv[i], "--romfs") == 0 && i + 1 < argc) {
             romfs_dir = argv[++i];
+        } else if (std::strcmp(argv[i], "--main") == 0 && i + 1 < argc) {
+            main_image = argv[++i];
         } else if (std::strcmp(argv[i], "--panel") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%ux%u", &panel_w, &panel_h) != 2 || panel_w == 0 || panel_h == 0) {
                 std::fprintf(stderr, "rt_test: --panel wants <w>x<h>\n");
@@ -484,8 +490,20 @@ int RunModuleMode(int argc, char** argv) {
     std::filesystem::create_directories(out_dir);
     FakeMemory mem;
     mem.regions[MainBase] = std::vector<uint8_t>(MainSize, 0);
+    if (main_image != nullptr) {
+        std::ifstream in(main_image, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (bytes.empty()) {
+            std::fprintf(stderr, "rt_test: --main %s: could not read it\n", main_image);
+            return 2;
+        }
+        auto& region = mem.regions[MainBase];
+        if (bytes.size() > region.size()) region.resize(bytes.size());
+        std::memcpy(region.data(), bytes.data(), bytes.size());
+    }
     PnRtConfig cfg = MakeConfig(mem, package_dir, romfs_dir);
     cfg.title_id = title;
+    if (main_image != nullptr) cfg.main_size = mem.regions[MainBase].size();
     cfg.build_id_hex = build;
     cfg.panel_w = panel_w;
     cfg.panel_h = panel_h;
@@ -511,6 +529,19 @@ int RunModuleMode(int argc, char** argv) {
         ++failures;
     }
     for (const char* page : pages) {
+        // PEANUTS: "@poke:<main offset>=<u64>" (hex) writes 8 bytes into the fake main between two
+        // pages, e.g. a pointer the game clears when a battle ends, so a module's later state renders.
+        unsigned long long off = 0, value = 0;
+        if (std::sscanf(page, "@poke:%llx=%llx", &off, &value) == 2) {
+            auto& region = mem.regions[MainBase];
+            if (off + 8 > region.size()) {
+                std::fprintf(stderr, "rt_test: %s is outside the fake main\n", page);
+                ++failures;
+            } else {
+                std::memcpy(region.data() + off, &value, 8);
+            }
+            continue;
+        }
         failures += !RenderPage(rt, page, out_dir / (std::string{page} + ".png"));
     }
     pn_rt_destroy(rt);
