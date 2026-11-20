@@ -310,6 +310,7 @@ public final class Installer {
     // ---- Extraction and the atomic active-slot swap ----
 
     private static void download(String url, File to, long total, Progress progress) throws IOException {
+        if (url.startsWith(Bundled.SCHEME)) { Bundled.copy(url, to, total, progress); return; }   // a package built into this APK: copied out, then verified as a download
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestProperty("User-Agent", "PeanutsNative");
         c.setInstanceFollowRedirects(true);

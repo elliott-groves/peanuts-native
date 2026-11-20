@@ -2131,3 +2131,18 @@ names in `sf_served`, with zeroed answers, and refuses the rest. `dm/peanuts/net
 | `dm/host/hle.h` | 1 | its declaration | `// PEANUTS:` |
 
 Upstream candidate: no (Peanuts' online play).
+
+### Companions built into the APK (2026-11-20)
+
+`-PnxCompanions=<TITLEID>-<Package>-<version>.dsmod.zip[,...]` builds companion packages into the APK (`dev.peanuts.Bundled`): each goes into
+`assets/companions/` with its SHA-256 in `assets/companions/index.json`, the catalog (`Catalog.fetchVersions`) offers it beside the GitHub releases (a
+release of the same title and version is preferred, and with the releases unreadable the bundled ones are still offered), and `Installer` copies it out of
+the APK instead of downloading it, then checks the digest as for a download. So the catalog screen, a game's Build step and ctl's `companion` install it
+the usual way. Without the option the index is empty. All the logic is in Peanuts' own files (`Bundled.java` new; `Catalog.java`, `Installer.java`,
+`ui/AppScreens.java`, which hands `Bundled` the app's context in every process).
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `android/app/build.gradle` | 1 | the `nxCompanionAssets` task: checks each zip's name against its `package.json` (title ID, version), copies it and writes the index | `PEANUTS begin` / `PEANUTS end` |
+
+Upstream candidate: no (Peanuts' companion catalog).

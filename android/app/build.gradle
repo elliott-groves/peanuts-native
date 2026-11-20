@@ -429,6 +429,45 @@ def nxFontAssets = tasks.register('nxFontAssets', Sync) {
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/nxfonts/assets'))
 tasks.named('preBuild') { dependsOn nxFontAssets }
 
+// PEANUTS begin: companion packages built into the APK (dev.peanuts.Bundled). -PnxCompanions=<TITLEID>-<Package>-<version>.dsmod.zip[,...] copies each into
+// assets/companions/ and lists it in assets/companions/index.json with its SHA-256; the catalog offers them beside the GitHub releases. The name is the catalog's
+// asset name (Catalog.ASSET) and must agree with the package's own package.json (title_id, version). Without the option the index is empty.
+def nxCompanionFiles = ((findProperty('nxCompanions') ?: '') as String).split(',').findAll { it.trim() }.collect { new File(it.trim()) }
+def nxCompanionOut = layout.buildDirectory.dir('generated/nxcompanions/assets/companions')
+def nxCompanionAssets = tasks.register('nxCompanionAssets') {
+    inputs.files(nxCompanionFiles)
+    inputs.property('nxCompanions', nxCompanionFiles.collect { it.path }.join(','))
+    outputs.dir(nxCompanionOut)
+    doLast {
+        def out = nxCompanionOut.get().asFile
+        project.delete(out); out.mkdirs()
+        def index = []
+        nxCompanionFiles.each { f ->
+            def m = (f.name =~ /^([0-9A-Fa-f]{16})-([A-Za-z0-9]+)-([0-9][0-9A-Za-z.\-]*)\.dsmod\.zip$/)
+            if (!f.isFile() || !m.matches()) throw new GradleException("nxCompanions: ${f}: want an existing <TITLEID>-<Package>-<version>.dsmod.zip")
+            def zf = new java.util.zip.ZipFile(f)
+            def pj
+            try {
+                def e = zf.getEntry('package.json')
+                if (e == null || zf.getEntry('dualscreen/manifest.json') == null) throw new GradleException("nxCompanions: ${f.name}: not a companion package (no package.json + dualscreen/manifest.json)")
+                pj = new groovy.json.JsonSlurper().parse(zf.getInputStream(e))
+            } finally { zf.close() }
+            if ((pj.title_id as String)?.toUpperCase() != m.group(1).toUpperCase() || (pj.version as String) != m.group(3))
+                throw new GradleException("nxCompanions: ${f.name}: its package.json says ${pj.title_id} ${pj.version}")
+            def md = java.security.MessageDigest.getInstance('SHA-256')
+            f.withInputStream { s -> byte[] buf = new byte[65536]; int n; while ((n = s.read(buf)) > 0) md.update(buf, 0, n) }
+            java.nio.file.Files.copy(f.toPath(), new File(out, f.name).toPath())
+            index << [file: f.name, titleId: m.group(1).toUpperCase(), package: m.group(2), version: m.group(3), name: (pj.name ?: '') as String,
+                      sha256: md.digest().encodeHex().toString(), size: f.length()]
+            logger.lifecycle("nxCompanions: ${f.name} built in")
+        }
+        new File(out, 'index.json').text = groovy.json.JsonOutput.toJson(index)
+    }
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/nxcompanions/assets'))
+tasks.named('preBuild') { dependsOn nxCompanionAssets }
+// PEANUTS end
+
 // The Nintendo extension shared font's stand-in (button icons in game text, e.g. "Press L + R"): dm/tools/make_ext_font.py makes assets/fonts/nintendo_ext.ttf at
 // every build where its inputs changed (no font file in the sources); GameFonts places it beside standard.ttf in DM_FONT_DIR (hle_sdk16.c, shared-font type 5).
 // Its letters come from the bundled Noto Sans above (SIL OFL, so the APK ships no system font's glyphs); -PnxLetterFont=<a .ttf> names another. It needs a python3

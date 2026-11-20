@@ -56,6 +56,7 @@ public final class Catalog {
             for (int i = 0; i < a.length(); i++) { JSONObject o = a.getJSONObject(i); names.put(o.optString("titleId").toUpperCase(Locale.ROOT), o.optString("name")); }
         } catch (Exception e) { android.util.Log.w(Companion.TAG, "catalog names: " + e); }
         Map<String, List<Item>> out = new LinkedHashMap<>();
+        IOException offline = null;   // the releases could not be read: the packages built into this APK (Bundled) are still offered
         try {
             for (JSONObject r : allReleases()) {   // every page, newest first
                 if (r.optBoolean("draft") || r.optBoolean("prerelease")) continue;
@@ -83,7 +84,21 @@ public final class Catalog {
                     out.computeIfAbsent(title, k -> new ArrayList<>()).add(it);
                 }
             }
-        } catch (org.json.JSONException e) { throw new IOException("releases: " + e.getMessage()); }
+        } catch (org.json.JSONException e) { offline = new IOException("releases: " + e.getMessage()); }
+        catch (IOException e) { offline = e; }
+        // The packages built into this APK (-PnxCompanions, Bundled): offered beside the releases; a release of the same title and version is preferred
+        int bundled = 0;
+        for (Map.Entry<String, List<Item>> e : Bundled.items().entrySet()) {
+            List<Item> versions = out.computeIfAbsent(e.getKey(), k -> new ArrayList<>());
+            for (Item b : e.getValue()) {
+                boolean released = false;
+                for (Item v : versions) if (v.packageName.equals(b.packageName) && compareVersions(v.version, b.version) == 0) released = true;
+                if (released) continue;
+                versions.add(new Item(b.titleId, b.packageName, b.version, b.url, b.tag, b.size, names.getOrDefault(b.titleId, b.gameName), b.date, b.notes, b.sha256, b.sha256Url));
+                bundled++;
+            }
+        }
+        if (offline != null && bundled == 0) throw offline;
         for (List<Item> versions : out.values()) {
             versions.sort((a, b) -> compareVersions(b.version, a.version));   // newest first, independent of release listing order
         }
