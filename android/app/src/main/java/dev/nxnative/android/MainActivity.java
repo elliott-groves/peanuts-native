@@ -275,6 +275,9 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMarginStart(Ui.dp(this, 10));
         row.addView(settings, lp);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        np.setMarginStart(Ui.dp(this, 10));
+        row.addView(dev.peanuts.online.NextendoHome.button(this, () -> page(true)), np);   // the Nextendo account: its picture (friends, friend code), or a globe to sign in
         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         mp.setMarginStart(Ui.dp(this, 10));
         row.addView(dev.peanuts.users.ProfileButton.make(this, () -> page(true)), mp);   // the user playing now, with two users or more: Profile and switching (dev.peanuts.users)

@@ -2,6 +2,8 @@ package dev.peanuts;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -21,7 +23,8 @@ import java.util.Locale;
 /**
  * Companions (Settings › Screens › Companions): the catalog of Eden Duo companion packages, a Banana page (PUi.page, a header with Back) of list cards: the games in
  * the launcher's list first, with Install / Update / Remove, then every other companion. A package installs beside the game's pack (<title ID>-work/peanuts/<Name>/);
- * the game picks it up at its next start. Games without a pack yet are listed but cannot take a package.
+ * the game picks it up at its next start. Games without a pack yet are listed but cannot take a package. Add from zip installs a package from the phone's
+ * storage the same way (PEANUTS: Installer.installLocal), marked unverified.
  */
 public final class CatalogActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -36,7 +39,14 @@ public final class CatalogActivity extends Activity {
         frame.setBackgroundColor(PUi.col(this, dev.nxnative.android.R.color.bn_bg));
         setContentView(frame);
         LinearLayout content = PUi.page(this, frame, 640);
-        content.addView(PUi.header(this, PUi.back(this, v -> finish()), "Companions", PUi.button(this, "Refresh", PUi.Kind.TONAL, v -> load())));
+        // PEANUTS: Add from zip beside Refresh: a companion package (.dsmod.zip) from the phone's storage, installed as a release would be (Installer.installLocal)
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.addView(PUi.button(this, "Add from zip", PUi.Kind.TONAL, v -> pickZip()));
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rp.setMarginStart(PUi.dp(this, 8));
+        actions.addView(PUi.button(this, "Refresh", PUi.Kind.TONAL, v -> load()), rp);
+        content.addView(PUi.header(this, PUi.back(this, v -> finish()), "Companions", actions));
         status = PUi.small(this, "");
         PUi.add(content, status, 12);
         list = new LinearLayout(this);
@@ -133,5 +143,63 @@ public final class CatalogActivity extends Activity {
                 render();
             });
         }, "peanuts-install").start();
+    }
+
+    // ---- PEANUTS: Add from zip ----
+    private static final int PICK_ZIP = 0x5A1;
+
+    private void pickZip() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed", "application/octet-stream"});
+        try { startActivityForResult(i, PICK_ZIP); }
+        catch (android.content.ActivityNotFoundException e) { Toast.makeText(this, "No file picker on this device", Toast.LENGTH_LONG).show(); }
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_ZIP || result != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        String fileName = displayName(uri);
+        status.setText("Reading " + (fileName == null ? "the package" : fileName) + "…");
+        new Thread(() -> {
+            File zip = new File(getCacheDir(), "picked-companion.zip");
+            String err = null, done = null, warning = null;
+            try {
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri); java.io.OutputStream out = new java.io.FileOutputStream(zip)) {
+                    if (in == null) throw new java.io.IOException("the file could not be opened");
+                    byte[] buf = new byte[65536]; int n; long total = 0;
+                    while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); if ((total += n) > 512L << 20) throw new java.io.IOException("over 512 MB: not a companion package"); }
+                }
+                Installer.LocalPackage p = Installer.readLocal(zip);
+                Games.Entry game = null;
+                for (Games.Entry g : Games.load(this)) if (g.titleId.equalsIgnoreCase(p.titleId)) game = g;
+                if (game == null) throw new java.io.IOException("it is for " + p.titleId + ", which is not in your games: add the game first");
+                File root = game.companionRoot();
+                if (root == null) throw new java.io.IOException("build " + game.name + " first: a companion goes beside its pack");
+                String pkg = Installer.localPackageName(root, p, fileName);
+                warning = Installer.installLocal(zip, p, pkg, fileName, root, null, this, (what, d, t) -> ui.post(() -> status.setText(what + " " + (t > 0 ? (d * 100 / t) + " %" : d + " files"))));
+                done = game.name + ": " + pkg + " " + p.version;
+            } catch (Exception e) {
+                err = e.getMessage() == null ? e.toString() : e.getMessage();
+            } finally {
+                zip.delete();
+            }
+            final String ferr = err, fdone = done, fwarn = warning;
+            ui.post(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (ferr != null) { status.setText("Not added"); new AlertDialog.Builder(this).setTitle("Companion not added").setMessage(ferr).setPositiveButton("OK", null).show(); return; }
+                status.setText("Added " + fdone + " (unverified: from a file, not the catalog)");
+                if (fwarn != null) new AlertDialog.Builder(this).setTitle("Added, with a warning").setMessage(fwarn).setPositiveButton("OK", null).show();
+                else Toast.makeText(this, "Added. Start the game to use it", Toast.LENGTH_LONG).show();
+                render();
+            });
+        }, "peanuts-companion-zip").start();
+    }
+
+    private String displayName(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, new String[] {android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(0);
+        } catch (Exception ignored) { /* a provider without names */ }
+        return uri.getLastPathSegment();
     }
 }

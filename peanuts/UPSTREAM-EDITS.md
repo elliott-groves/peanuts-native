@@ -2146,3 +2146,15 @@ the usual way. Without the option the index is empty. All the logic is in Peanut
 | `android/app/build.gradle` | 1 | the `nxCompanionAssets` task: checks each zip's name against its `package.json` (title ID, version), copies it and writes the index | `PEANUTS begin` / `PEANUTS end` |
 
 Upstream candidate: no (Peanuts' companion catalog).
+
+### Home's Nextendo button, friends and players online (2026-11-23)
+
+Home's header gets the Nextendo account beside FAQ and Settings (`dev.peanuts.online.NextendoHome`): the account's picture, which opens the friends page (friend code with Copy, requests, the friend list with what each friend plays, add and remove), or a globe that signs in. The covers of the games Nextendo serves show its players online (`dev.peanuts.online.NextendoApi`, Nextendo's public `/api/online-counts`).
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `android/app/src/main/java/dev/nxnative/android/MainActivity.java` | 1 | `headerButtons()`: the Nextendo button after Settings | inside `PEANUTS begin` / `PEANUTS end` |
+| `android/app/src/main/res/drawable/ic_globe.xml` | new | the signed-out button's globe (Material Icons "language", Apache-2.0) | `PEANUTS:` comment |
+| `android/app/src/main/res/values/ids.xml` | new | `nx_cover_info`, which places a cover's player count | `PEANUTS:` comment |
+
+Upstream candidate: no (Peanuts' online play).

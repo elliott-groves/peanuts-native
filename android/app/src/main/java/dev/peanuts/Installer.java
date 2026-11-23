@@ -323,11 +323,16 @@ public final class Installer {
     }
 
     private static String extractAndActivate(File zip, String titleId, String packageName, String version, String tag, String url, File root, String knownBuildId, Context ctx, Progress progress) throws IOException {
+        return extractAndActivate(zip, "", true, titleId, packageName, version, tag, url, root, knownBuildId, ctx, progress);
+    }
+
+    // PEANUTS: prefix (a folder the package sits in inside the zip, "" for none) and verified (false for a package the player picked: no publisher digest) for installLocal
+    private static String extractAndActivate(File zip, String prefix, boolean verified, String titleId, String packageName, String version, String tag, String url, File root, String knownBuildId, Context ctx, Progress progress) throws IOException {
         File fresh = new File(root, packageName + ".new");
         delete(fresh);
         if (!fresh.mkdirs()) throw new IOException("cannot create " + fresh);
         try {
-            extract(zip, fresh, progress);
+            extract(zip, fresh, progress, prefix);
             if (!new File(fresh, "package.json").isFile() || !new File(fresh, "dualscreen/manifest.json").isFile()) throw new IOException("not a companion package (no package.json + dualscreen/manifest.json)");
             String manifest = new String(Files.readAllBytes(new File(fresh, "dualscreen/manifest.json").toPath()), StandardCharsets.UTF_8);
             String title = new JSONObject(manifest).optString("title_id", "").toUpperCase(Locale.ROOT);
@@ -335,7 +340,7 @@ public final class Installer {
             refuseIfIncompatible(fresh);   // before anything is activated - fresh is still just a staging folder, safe to abandon on throw (the finally below deletes it)
             String warning = buildIdWarning(fresh, knownBuildId);
             try (OutputStream o = new FileOutputStream(new File(fresh, "installed.json"))) {
-                o.write(new JSONObject().put("version", version).put("tag", tag).put("url", url).put("verified", true).toString(2).getBytes(StandardCharsets.UTF_8));
+                o.write(new JSONObject().put("version", version).put("tag", tag).put("url", url).put("verified", verified).toString(2).getBytes(StandardCharsets.UTF_8));
             }
             // Found in review: the game-running check at install()'s entry only covers the moment the download started; download+verify+extract
             // above can take minutes, long enough for the user to start the game in the meantime. Re-check right before the swap, which is the actual
@@ -450,18 +455,99 @@ public final class Installer {
     private static boolean isPromotableNew(File d) { return isUsablePackage(d) && new File(d, "installed.json").isFile(); }
 
     /** Unzips into dir; an entry escaping dir (zip slip) fails the install */
-    private static void extract(File zip, File dir, Progress progress) throws IOException {
+    private static void extract(File zip, File dir, Progress progress) throws IOException { extract(zip, dir, progress, ""); }
+
+    /** PEANUTS: prefix: only the entries under that folder of the zip, with it taken off their names ("" for every entry as it is) */
+    private static void extract(File zip, File dir, Progress progress, String prefix) throws IOException {
         String base = dir.getCanonicalPath() + File.separator;
         try (ZipInputStream z = new ZipInputStream(new FileInputStream(zip))) {
             ZipEntry e; long files = 0;
             while ((e = z.getNextEntry()) != null) {
-                File f = new File(dir, e.getName());
+                String name = e.getName();
+                if (!prefix.isEmpty()) { if (!name.startsWith(prefix) || name.length() == prefix.length()) continue; name = name.substring(prefix.length()); }
+                File f = new File(dir, name);
                 if (!f.getCanonicalPath().startsWith(base)) throw new IOException("zip entry escapes the package: " + e.getName());
                 if (e.isDirectory()) { f.mkdirs(); continue; }
                 f.getParentFile().mkdirs();
                 try (OutputStream o = new FileOutputStream(f)) { byte[] buf = new byte[65536]; int n; while ((n = z.read(buf)) > 0) o.write(buf, 0, n); }
                 if (progress != null) progress.on("extract", ++files, 0);
             }
+        }
+    }
+
+    // ---- PEANUTS: a companion package the player picked as a .zip (Settings › Screens › Companions › Add from zip) ----
+
+    /** What a picked .zip holds: its package.json's title and version, and the folder the package sits in inside the zip ("" at the top, else "Name/") */
+    public static final class LocalPackage {
+        public final String titleId, version, name, prefix;
+        LocalPackage(String titleId, String version, String name, String prefix) { this.titleId = titleId; this.version = version; this.name = name; this.prefix = prefix; }
+    }
+
+    /** Reads a picked .zip's package.json (at the top, or in one folder) and checks it is a companion package: dualscreen/manifest.json beside it. Throws with
+     * the reason the player sees otherwise */
+    public static LocalPackage readLocal(File zip) throws IOException {
+        String prefix = null; byte[] pj = null; java.util.Set<String> names = new java.util.HashSet<>();
+        try (ZipInputStream z = new ZipInputStream(new FileInputStream(zip))) {
+            ZipEntry e;
+            while ((e = z.getNextEntry()) != null) {
+                String n = e.getName();
+                names.add(n);
+                if (e.isDirectory() || !(n.equals("package.json") || n.matches("[^/]+/package\\.json"))) continue;
+                String pre = n.substring(0, n.length() - "package.json".length());
+                if (pj != null && pre.length() >= prefix.length()) continue;   // the shallowest package.json wins
+                prefix = pre; pj = z.readAllBytes();
+            }
+        } catch (java.util.zip.ZipException e) {
+            throw new IOException("not a .zip file (" + e.getMessage() + ")");
+        }
+        if (pj == null) throw new IOException("no package.json in it: a companion package (.dsmod.zip) has package.json and dualscreen/manifest.json");
+        if (!names.contains(prefix + "dualscreen/manifest.json")) throw new IOException("no dualscreen/manifest.json beside its package.json: not a companion package");
+        try {
+            JSONObject o = new JSONObject(new String(pj, StandardCharsets.UTF_8));
+            String title = o.optString("title_id", "").toUpperCase(Locale.ROOT), ver = o.optString("version", "").trim();
+            if (!title.matches("[0-9A-F]{16}")) throw new IOException("its package.json names no game (title_id)");
+            if (ver.isEmpty()) ver = "local";
+            if (!ver.matches("[0-9A-Za-z.\\-]{1,32}") || ver.contains("..")) throw new IOException("its version \"" + ver + "\" cannot name a folder");
+            return new LocalPackage(title, ver, o.optString("name", title), prefix);
+        } catch (org.json.JSONException e) {
+            throw new IOException("package.json: " + e.getMessage());
+        }
+    }
+
+    /** The folder name a picked package installs under in root: the package already installed there for the same game (so the new one replaces it and keeps
+     * its versions), else the name in a release's file name (<TITLEID>-<Package>-<version>.dsmod.zip), else its package.json name in letters and digits */
+    public static String localPackageName(File root, LocalPackage p, String fileName) {
+        File[] dirs = root == null ? null : root.listFiles();
+        if (dirs != null) for (File d : dirs) {
+            String n = d.getName();
+            if (!d.isDirectory() || n.startsWith(".") || n.endsWith(".new") || n.endsWith(".old") || !n.matches("[A-Za-z0-9]+")) continue;
+            try {
+                JSONObject o = new JSONObject(new String(Files.readAllBytes(new File(d, "package.json").toPath()), StandardCharsets.UTF_8));
+                if (p.titleId.equalsIgnoreCase(o.optString("title_id"))) return n;
+            } catch (Exception ignored) { /* not a package folder */ }
+        }
+        Matcher m = Pattern.compile("([0-9A-Fa-f]{16})-([A-Za-z0-9]+)-.+\\.dsmod\\.zip").matcher(fileName == null ? "" : fileName);
+        if (m.matches() && m.group(1).equalsIgnoreCase(p.titleId)) return m.group(2);
+        String n = p.name.replaceAll("[^A-Za-z0-9]", "");
+        if (n.length() > 40) n = n.substring(0, 40);
+        return n.isEmpty() ? "Companion" + p.titleId : n;
+    }
+
+    /** Installs a picked package as install() does a release (the same checks, the same atomic swap, its versions kept), marked unverified: there is no
+     * publisher digest to check it against. Returns the build-id warning, as install() does */
+    public static String installLocal(File zip, LocalPackage p, String packageName, String fileName, File root, String knownBuildId, Context ctx, Progress progress) throws IOException {
+        if (!packageName.matches("[A-Za-z0-9]+")) throw new IOException("bad package name " + packageName);
+        ReentrantLock lock = lockFor(packageName);
+        lock.lock();
+        try {
+            refuseIfGameRunning(ctx);
+            if (!root.isDirectory() && !root.mkdirs()) throw new IOException("cannot create " + root);
+            repairLocked(root, packageName);
+            File old = versionDir(root, packageName, p.version);
+            if (old.isDirectory() && !p.version.equals(installedVersion(root, packageName))) delete(old);   // the same version picked again: the new files, not the archived ones
+            return extractAndActivate(zip, p.prefix, false, p.titleId, packageName, p.version, "local", "file:" + (fileName == null ? "picked.zip" : fileName.replaceAll("[\\r\\n]", "")), root, knownBuildId, ctx, progress);
+        } finally {
+            lock.unlock();
         }
     }
 

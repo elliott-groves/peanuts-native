@@ -180,7 +180,9 @@ public final class Nextendo {
     }
 
     public static void signOut(Context c) {
+        synchronized (TOKENS) { access = null; accessExp = 0; }   // PEANUTS: the account page's access token goes with the account
         prefs(c).edit().remove(K_REFRESH).remove(K_GAME).remove(K_USER).apply();
+        NextendoApi.forget(c);
         changed();
     }
 
@@ -209,6 +211,7 @@ public final class Nextendo {
                         + "&redirect_uri=" + enc(REDIRECT) + "&code_verifier=" + enc(verifier));
                 if (t == null || t.optString("refresh_token").isEmpty() || t.optString("access_token").isEmpty()) return "Nextendo gave no tokens";
                 store(app, K_REFRESH, t.getString("refresh_token"));
+                keepAccess(t);
                 return fetchGameToken(app, t.getString("access_token")) ? null : "Nextendo gave no game token";
             }
         } catch (java.net.BindException e) {
@@ -244,12 +247,7 @@ public final class Nextendo {
         changed();
         new Thread(() -> {
             try {
-                String rt = load(app, K_REFRESH);
-                JSONObject t = rt == null ? null : post("grant_type=refresh_token&refresh_token=" + enc(rt) + "&client_id=" + enc(CLIENT_ID));
-                if (t != null) {
-                    if (!t.optString("refresh_token").isEmpty()) store(app, K_REFRESH, t.getString("refresh_token"));
-                    if (!t.optString("access_token").isEmpty()) fetchGameToken(app, t.getString("access_token"));
-                }
+                synchronized (TOKENS) { if (refreshLocked(app)) fetchGameToken(app, access); }   // PEANUTS: one refresh at a time (each one replaces the refresh token)
             } catch (Exception e) { Log.w(TAG, "refresh: " + e.getClass().getSimpleName()); }
             busy.set(false); changed();
         }, "nextendo-refresh").start();
@@ -272,6 +270,45 @@ public final class Nextendo {
     private static JSONObject gameToken(Context c) {
         try { String s = load(c, K_GAME); return s == null ? null : new JSONObject(s); } catch (Exception e) { return null; }
     }
+
+    // ---------- PEANUTS: the access token for the account APIs (NextendoApi: Home's Nextendo button, the friends page) ----------
+    // An access token lasts one hour; a refresh returns a new refresh token, which replaces the old one, so every refresh runs under TOKENS (refreshIfDue's too).
+    // The access token stays in memory only: a new process refreshes once.
+    private static final Object TOKENS = new Object();
+    private static String access;
+    private static long accessExp;
+
+    /** An access token with at least two minutes left, refreshed when needed; null when signed out or Nextendo refused. Network: never on the UI thread */
+    static String accessToken(Context c, boolean fresh) throws Exception {
+        Context app = c.getApplicationContext();
+        synchronized (TOKENS) {
+            if (!fresh && access != null && accessExp - System.currentTimeMillis() > 120_000L) return access;
+            if (!refreshLocked(app)) return null;
+            if (tokenExpiry(app) - System.currentTimeMillis() <= REFRESH_BELOW_MS) { try { fetchGameToken(app, access); } catch (Exception ignored) { /* the next run asks again */ } }
+            return access;
+        }
+    }
+
+    private static boolean refreshLocked(Context app) throws Exception {
+        String rt = load(app, K_REFRESH);
+        if (rt == null) return false;
+        JSONObject t = post("grant_type=refresh_token&refresh_token=" + enc(rt) + "&client_id=" + enc(CLIENT_ID));
+        if (t == null) return false;
+        if (!t.optString("refresh_token").isEmpty()) store(app, K_REFRESH, t.getString("refresh_token"));
+        return keepAccess(t);
+    }
+
+    private static boolean keepAccess(JSONObject t) {
+        if (t.optString("access_token").isEmpty()) return false;
+        synchronized (TOKENS) {
+            access = t.optString("access_token");
+            accessExp = System.currentTimeMillis() + t.optLong("expires_in", 3600) * 1000L;
+        }
+        return true;
+    }
+
+    static String base() { return BASE; }
+    static String clientId() { return CLIENT_ID; }
 
     // ---------- HTTP ----------
     private static HttpURLConnection open(String path) throws Exception {

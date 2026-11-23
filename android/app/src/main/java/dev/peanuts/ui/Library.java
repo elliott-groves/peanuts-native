@@ -142,6 +142,8 @@ public final class Library {
     private String find = "";
     private boolean showHidden;   // the "Hidden: N missing games · Show/Hide" toggle (found in review): off by default, so a hidden card needs an explicit tap to reveal
     private final Map<String, TextView> tiles = new HashMap<>();   // the tiles of the covers showing, by title ID (icons land while they show)
+    private final Map<String, FrameLayout> countCovers = new HashMap<>();   // PEANUTS: the covers showing, by upper-case title ID, for the Nextendo player counts (applyCounts)
+    private boolean countsTicking;
     private final Map<String, Boolean> companions = new HashMap<>();   // title ID → a companion is installed (read once per pass; cleared by a scan and a build's end)
     // the build card's live parts (null when it is not on screen)
     private TextView buildStatus, buildBody, buildPct;
@@ -774,6 +776,7 @@ public final class Library {
         if (building == 0 && filter == BUILDING) filter = ALL;   // the last job finished: the filter goes away
         if (building == 0) ScreensOff.hide();   // nothing builds any more: the screens come back by themselves
         if (screensOffB != null) screensOffB.setVisibility(building > 0 ? View.VISIBLE : View.GONE);   // Home's header shows it only while something builds
+        startCounts();   // PEANUTS: Nextendo's players online on the covers
         int all = rows.size(), ready = 0, toBuild = 0, noProfile = 0;
         List<Row> bl = new ArrayList<>(), rd = new ArrayList<>(), bd = new ArrayList<>(), np = new ArrayList<>();
         for (Row r : rows) {
@@ -824,7 +827,7 @@ public final class Library {
 
         Motion.clear();
         box.removeAllViews();
-        tiles.clear(); keyed.clear();
+        tiles.clear(); keyed.clear(); countCovers.clear();
         lostKey = null; restoreKey = null;   // the removal above is not a focus lost to restore at the next rebuild
         buildStatus = null; buildBody = null; buildPct = null; buildBar = null; coverChip = null; coverStrip = null; firstCover = null;
         if (ondeviceCard != null && ondeviceCard.getParent() instanceof ViewGroup) ((ViewGroup) ondeviceCard.getParent()).removeView(ondeviceCard);
@@ -1165,6 +1168,9 @@ public final class Library {
             cover.addView(mark(a.getString(R.string.not_supported_yet), PUi.col(a, R.color.bn_danger_tint), R.color.bn_danger, false, Gravity.TOP | Gravity.START));
         }
         if (companion) cover.addView(companionBadge(building && !stopped));
+        cover.setTag(R.id.nx_cover_info, new boolean[] {companion, building && !stopped});   // PEANUTS: where the player count goes (countPill)
+        countCovers.put(r.id().toUpperCase(Locale.ROOT), cover);
+        countPill(cover, r.id());
 
         // the name
         int nameColor = !building && st == NO_PROFILE ? R.color.bn_text_2 : R.color.bn_text;
@@ -1244,6 +1250,56 @@ public final class Library {
         lp.setMargins(p8, p8, p8, p8);
         t.setLayoutParams(lp);
         return t;
+    }
+
+    // ---- PEANUTS: players online on Nextendo Network, on the covers of the games it serves (dev.peanuts.online.NextendoApi.counts) ----
+
+    /** Reads the counts now (when the last read is a minute old) and again every minute while this library is Home's */
+    private void startCounts() {
+        dev.peanuts.online.NextendoApi.refreshCounts(55_000L, this::applyCounts);
+        if (countsTicking) return;
+        countsTicking = true;
+        UI.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (current != Library.this || box == null) { countsTicking = false; return; }
+                if (inFront && box.isAttachedToWindow()) dev.peanuts.online.NextendoApi.refreshCounts(55_000L, Library.this::applyCounts);
+                UI.postDelayed(this, 60_000L);
+            }
+        }, 60_000L);
+    }
+
+    private void applyCounts() { for (Map.Entry<String, FrameLayout> e : countCovers.entrySet()) countPill(e.getValue(), e.getKey()); }
+
+    /** The pill at a cover's bottom right: a leaf dot and the number of players online now, for a game Nextendo serves (left of the companion badge) */
+    private void countPill(FrameLayout cover, String titleId) {
+        Integer n = dev.peanuts.online.NextendoApi.counts().get(titleId.toUpperCase(Locale.ROOT));
+        TextView pill = cover.findViewWithTag("nx-count");
+        if (n == null) { if (pill != null) cover.removeView(pill); return; }
+        String text = n >= 10_000 ? (n / 1000) + "k" : String.valueOf(n);
+        if (pill == null) {
+            pill = PUi.text(a, text, 11, R.color.bn_text, 800);
+            pill.setTag("nx-count");
+            pill.setSingleLine(true);
+            pill.setIncludeFontPadding(false);
+            pill.setGravity(Gravity.CENTER_VERTICAL);
+            pill.setBackground(PUi.round(PUi.col(a, R.color.bn_card), PUi.dp(a, 999), PUi.col(a, R.color.bn_card_stroke), Math.max(1, PUi.dp(a, 1))));
+            pill.setPadding(PUi.dp(a, 7), 0, PUi.dp(a, 8), 0);
+            pill.setElevation(PUi.dp(a, 1));
+            android.graphics.drawable.GradientDrawable dot = PUi.round(PUi.col(a, R.color.bn_leaf), PUi.dp(a, 999), 0, 0);
+            dot.setSize(PUi.dp(a, 7), PUi.dp(a, 7));
+            pill.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null);
+            pill.setCompoundDrawablePadding(PUi.dp(a, 4));
+            pill.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            boolean[] info = cover.getTag(R.id.nx_cover_info) instanceof boolean[] ? (boolean[]) cover.getTag(R.id.nx_cover_info) : new boolean[2];
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, PUi.dp(a, 22), Gravity.BOTTOM | Gravity.END);
+            int p8 = PUi.dp(a, 8);
+            lp.setMargins(p8, p8, info[0] ? PUi.dp(a, 34) : p8, info[1] ? PUi.dp(a, 20) : p8);
+            cover.addView(pill, lp);
+            CharSequence cd = cover.getContentDescription();
+            if (cd != null && !cd.toString().contains("online on Nextendo")) cover.setContentDescription(cd + ", " + n + " playing online on Nextendo");
+        } else {
+            pill.setText(text);
+        }
     }
 
     /** The building cover's 6 dp progress strip along the bottom edge, 8 dp inset: banana deep on 70 % of the screen's colour; indeterminate for upstream's Prepare */

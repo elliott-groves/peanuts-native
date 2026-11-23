@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- PEANUTS: a Home cover's {companion badge, progress strip} flags, which place its Nextendo player count (dev.peanuts.ui.Library.countPill) -->
+    <item name="nx_cover_info" type="id" />
+</resources>
