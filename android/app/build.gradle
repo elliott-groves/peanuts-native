@@ -545,6 +545,11 @@ if (nxPackEngine == 'native') {
     // PEANUTS: shader_split.py's Yaz0 in C (dm/peanuts/pack_worker/nxyaz0.c); a stage without it splits in Python, many times slower (peanuts/scripts/ondevice-stage.sh <work dir> zbic adds it)
     need += ['python/lib/python3.14/lib-dynload/_nxyaz0.cpython-314-aarch64-linux-android.so']
     need.each { if (!new File(stage, it).isFile()) throw new GradleException("$stage has no $it: run android/ondevice/build.sh <work dir> (it makes <work dir>/stage)") }
+    // PEANUTS: the split's pool workers and the Oodle host run as nxpack_worker; a stage made by android/ondevice/build.sh alone lacks it, and every Prepare of a
+    // Trinity game then failed at the shaders step ("could not decode 62 compressed files", split.log: unable to open file …/python/bin/nxpack_worker; Z-A, 2026-11-23)
+    ['python/bin/nxpack_worker', 'python/lib/python3.14/lib-dynload/_nxaes.cpython-314-aarch64-linux-android.so'].each {
+        if (!new File(stage, it).isFile()) throw new GradleException("$stage has no $it: run dm/peanuts/pack_worker/build.sh $stage <work dir>/py/prefix/include/python3.14 (peanuts/scripts/ondevice-stage.sh does)")
+    }
     // The stage's translator must be built from this tree: vk_android_build.py check_translator refuses any other on the phone, so an APK with a stale one fails
     // every Prepare at the shaders step (2026-11-10: a stage made before a translator change). xlate_tree.py --check-lib reads the digests the library embeds
     // (it is arm64 Android code: it does not run here); it runs at every build, as the stage can be rebuilt between two builds
