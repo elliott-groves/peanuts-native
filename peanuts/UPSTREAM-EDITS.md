@@ -2158,3 +2158,16 @@ Home's header gets the Nextendo account beside FAQ and Settings (`dev.peanuts.on
 | `android/app/src/main/res/values/ids.xml` | new | `nx_cover_info`, which places a cover's player count | `PEANUTS:` comment |
 
 Upstream candidate: no (Peanuts' online play).
+
+### Copy strides kept in the command buffer (2026-11-24)
+
+`SetCopyRowStride` / `SetCopyImageStride` took 24 bytes of command memory each; on NVN they are state of the command buffer. Super Smash Bros. Ultimate's World of Light gives a texture upload 256 bytes and no out-of-memory handler, so it crashed ([entry](../docs/reference/nvn-objects.md#copy-strides-kept-in-the-command-buffer)).
+
+| File | Hunks | Change | Marker |
+|---|---|---|---|
+| `dm/gfx/nvn/nvn_obj.h` | 3 | `cmd_t.copy_row` / `copy_img`; `p_copy_b2t.strides` (in its padding), `copy_strides`, `copy_strides_of`; `p_copy_stride` is only read | `PEANUTS(upstream-candidate)` |
+| `dm/gfx/nvn/hle_nvn.c` | 2 | `rec_b2t`; the setters store, the getters return | `PEANUTS(upstream-candidate)` |
+| `dm/gfx/nvn/nvn_mtl.m`, `dm/gfx/vk_android/vka_exec.c` | 2 each | a copy's own strides (Metal: compiled by nobody here) | `PEANUTS(upstream-candidate)` |
+| `dm/gfx/tests/t_nvn.c` | 1 | 6a: the Smash sequence in 256 bytes, the getters | `PEANUTS(upstream-candidate)` |
+
+Upstream candidate: yes (any `nn::gfx` title).

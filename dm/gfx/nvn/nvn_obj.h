@@ -81,6 +81,7 @@ typedef struct {
     size_t ctl_size;                     // Bytes in the last control memory block supplied by the game (the host records no control commands)
     uint64_t mem_size;                   // GetCommandMemorySize: used + free as of the last segment switch (AddCommandMemory, a host-lent segment), then fixed until the next one, as on NVN.
                                          // One aligned store per switch: a thread reading it while another records into the buffer sees a steady value (hle_nvn.c, at GetCommandMemorySize)
+    int64_t copy_row, copy_img;          // PEANUTS(upstream-candidate): SetCopyRowStride / SetCopyImageStride (0: tightly packed): state of the command buffer, as in NVN (its getters read it back), taken into each buffer ↔ texture copy (copy_strides)
 } cmd_t;                                                                                   FITS(cmd_t, NVNcommandBuffer);
 
 // ---------- State objects (defaults follow the NVN / GL defaults) ----------
@@ -186,14 +187,24 @@ static inline const p_draw *draw_rec(const void *a, uint32_t size, p_draw *t) { 
 static inline const p_draw_idx *draw_idx_rec(const void *a, uint32_t size, p_draw_idx *t) { if (size - 8 >= sizeof *t) return a; memset(t, 0, sizeof *t); memcpy(t, a, size - 8); return t; }
 typedef struct { int32_t x, y, z; uint64_t caller, ind; } p_dispatch;   // caller: return address of the game call site (to locate the dispatcher); ind != 0: DispatchComputeIndirect, the group counts are read by the GPU from that address
 typedef struct { const dpool_t *pool; } p_set_pool;
-typedef struct { uint64_t src; const tex_t *tex; view_t view; uint8_t has_view; NVNcopyRegion r; int32_t flags; } p_copy_b2t;
+typedef struct { uint64_t src; const tex_t *tex; view_t view; uint8_t has_view, strides; NVNcopyRegion r; int32_t flags; } p_copy_b2t;   // strides: a copy_strides follows the record's texture snapshot
+// PEANUTS(upstream-candidate): the strides of one buffer ↔ texture copy, recorded with it when the command buffer has either set (hle_nvn.c rec_b2t). They used to be records of their own
+// (OP_COPY_STRIDE, 24 bytes each), which are none on hardware: Super Smash Bros. Ultimate gives a texture upload 256 bytes of command memory and no out-of-memory handler (main+0x3794830),
+// and the barrier, two strides and copy came to 280, so its memory callback (nn::gfx's, main+0x31be0) called the handler it does not have (pc=0)
+typedef struct { int64_t row, img; } copy_strides;
+// The strides of a copy record: its own, else the replay's state, which only a frame capture from before set (OP_COPY_STRIDE)
+static inline copy_strides copy_strides_of(const p_copy_b2t *c, int64_t row, int64_t img) {
+    copy_strides s = {row, img};
+    if (c->strides) memcpy(&s, (const uint8_t *)(c + 1) + sizeof(tex_t), sizeof s);
+    return s;
+}
 // A host-only bit in flags: DM_COPY_RESOLVE = this is a Downsample (multisample resolve), recorded as a texture copy so everything else treats it as one (reads the source, writes the destination)
 #define DM_COPY_RESOLVE 0x40000000
 typedef struct { const tex_t *src, *dst; view_t sv, dv; uint8_t has_sv, has_dv; NVNcopyRegion sr, dr; int32_t flags; } p_copy_t2t;   // Reused for T2B: src stores the destination buffer address
 // FSR 3.1's inputs for one DLSS evaluation (vka_exec.c dlss_eval, mode 4 -> vka_fsr3.c): the colour and output rectangles as a copy's, then depth, motion vectors, jitter, their scale, the reset
 typedef struct { p_copy_t2t c; const tex_t *depth, *motion; float jitter[2], mv[2]; uint32_t reset; } p_dlss_t2t;
 typedef struct { const tex_t *tex; view_t view; uint8_t has_view, is_uint; NVNcopyRegion r; int32_t mask; union { float f[4]; uint32_t u[4]; } c; } p_clear_tex;
-typedef struct { int64_t stride; int image; } p_copy_stride;   // image: SetCopyImageStride (bytes per layer / depth slice) instead of SetCopyRowStride
+typedef struct { int64_t stride; int image; } p_copy_stride;   // image: SetCopyImageStride (bytes per layer / depth slice) instead of SetCopyRowStride. No longer recorded (copy_strides); frame captures from before have it
 // NVN2's DLSS evaluation: the parameters at the time of the call, each texture snapped after the record (hle_nvn.c "NVN2's DLSS"; vka_exec.c dlss_eval)
 enum { DLSS_COLOR, DLSS_DEPTH, DLSS_MOTION, DLSS_OUTPUT, DLSS_BIAS, DLSS_EXPOSURE, DLSS_TEXTURES };
 typedef struct { const tex_t *tex[DLSS_TEXTURES]; uint64_t net; int32_t iw, ih, ow, oh, base[DLSS_TEXTURES][2]; float mv[2], jitter[2], pre_exposure; uint32_t flags, reset; } p_dlss;

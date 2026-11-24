@@ -638,6 +638,31 @@ int main(void) {
     unsigned bi = 0; while (strcmp(nvn_names[bi], "nvnCommandBufferBarrier")) bi++;
     EXPECT("Barrier count = 4 frames × 5", 20, nvn_slot[bi].cnt);
 
+    // 6a. The copy strides are state of the command buffer and take no command memory (PEANUTS(upstream-candidate)): Super Smash Bros. Ultimate records a barrier, both strides and one
+    //     texture upload into 256 bytes and has no out-of-memory handler behind its memory callback, so the callback must not be called
+    {
+        static uint8_t m[512 + 4096] __attribute__((aligned(4096))); NVNmemoryPoolBuilder mb; NVNmemoryPool mp; NVNcommandBuffer c6;
+        P(nvnMemoryPoolBuilderSetDefaults)(&mb); P(nvnMemoryPoolBuilderSetStorage)(&mb, m, sizeof m); P(nvnMemoryPoolInitialize)(&mp, &mb);
+        NVNtextureBuilder b; NVNtexture t6; P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b);
+        P(nvnTextureBuilderSetWidth)(&b, 8); P(nvnTextureBuilderSetHeight)(&b, 4); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8);
+        P(nvnTextureBuilderSetStorage)(&b, &mp, 512); P(nvnTextureInitialize)(&t6, &b);
+        NVNtextureView v6; P(nvnTextureViewSetDefaults)(&v6); P(nvnTextureViewSetLevels)(&v6, 0, 1); NVNcopyRegion r6 = {0, 0, 0, 8, 4, 1};
+        P(nvnCommandBufferInitialize)(&c6, &dev); P(nvnCommandBufferSetMemoryCallback)(&c6, mem_cb);
+        EXPECT("copy strides of a new command buffer: 0", 0, P(nvnCommandBufferGetCopyRowStride)(&c6) | P(nvnCommandBufferGetCopyImageStride)(&c6));
+        P(nvnCommandBufferAddCommandMemory)(&c6, &mp, 0, 256);
+        int calls = g_cb_calls;
+        P(nvnCommandBufferBeginRecording)(&c6); P(nvnCommandBufferBarrier)(&c6, 0);
+        size_t used = P(nvnCommandBufferGetCommandMemoryUsed)(&c6);
+        P(nvnCommandBufferSetCopyRowStride)(&c6, 32); P(nvnCommandBufferSetCopyImageStride)(&c6, 128);
+        EXPECT("copy strides take no command memory", used, P(nvnCommandBufferGetCommandMemoryUsed)(&c6));
+        EXPECT("row stride read back", 32, P(nvnCommandBufferGetCopyRowStride)(&c6)); EXPECT("image stride read back", 128, P(nvnCommandBufferGetCopyImageStride)(&c6));
+        P(nvnCommandBufferCopyBufferToTexture)(&c6, (NVNbufferAddress)m, &t6, &v6, &r6, 0);
+        P(nvnCommandBufferEndRecording)(&c6);
+        EXPECT("barrier, strides and one upload fit 256 bytes", calls, g_cb_calls);
+        EXPECT("their size: 16 + 216 + END", 240, P(nvnCommandBufferGetCommandMemoryUsed)(&c6));
+        P(nvnCommandBufferFinalize)(&c6); P(nvnTextureFinalize)(&t6); P(nvnMemoryPoolFinalize)(&mp);
+    }
+
     // 6b. Readback: pixel (x,y) = {x*16+y, y*16+x, 0x55, 0xAA} (expected values computed directly from the formula)
     {
         #define PX(x, y, c) ((uint8_t)((c) == 0 ? (x) * 16 + (y) : (c) == 1 ? (y) * 16 + (x) : (c) == 2 ? 0x55 : 0xAA))

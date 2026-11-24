@@ -1048,8 +1048,9 @@ static void copy_bt(const p_copy_b2t *c, int to_tex) {
     unsigned lv = c->has_view && c->view.set_levels ? c->view.base_level : 0, l0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
     vka_tex_soft_copy(im, to_tex ? (int)lv : -1, g_cb);   // (a soft texture copied from, or into at level 0: made whole first)
     if (!vka_img_lv(im, &lv) || c->r.width <= 0 || c->r.height <= 0) return;
-    size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb, rows = (size_t)(c->r.height + f->bh - 1) / f->bh;
-    size_t img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;
+    copy_strides cs = copy_strides_of(c, S.copy_stride, S.copy_img_stride);   // PEANUTS(upstream-candidate): the copy's own strides
+    size_t row = cs.row ? (size_t)cs.row : (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb, rows = (size_t)(c->r.height + f->bh - 1) / f->bh;
+    size_t img = cs.img ? (size_t)cs.img : row * rows;
     int is3d = im->depth > 1 || c->tex->d.target == NVN_TEXTURE_TARGET_3D, nz = c->r.depth > 0 ? c->r.depth : 1;
     if (row % f->bpb) { VRED_ONCE("buffer copy row stride %zu is not a whole number of %u-byte blocks", row, f->bpb); return; }
     uint64_t span = img * (size_t)(nz - 1) + row * (rows - 1) + (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb;
@@ -1074,7 +1075,7 @@ static void copy_bt(const p_copy_b2t *c, int to_tex) {
         vk.vkCmdCopyImageToBuffer(g_cb, im->img, VK_IMAGE_LAYOUT_GENERAL, bounce ? s.buf : b, (uint32_t)n, rg);
         if (bounce) {
             vka_barrier(g_cb);
-            size_t wb = row, srow = S.copy_stride ? (size_t)S.copy_stride : wb, simg = S.copy_img_stride ? (size_t)S.copy_img_stride : srow * rows;
+            size_t wb = row, srow = cs.row ? (size_t)cs.row : wb, simg = cs.img ? (size_t)cs.img : srow * rows;   // PEANUTS(upstream-candidate): cs
             for (int z = 0; z < nz; z++) for (size_t y = 0; y < rows; y++) { VkBufferCopy bc = {s.off + (z * rows + y) * wb, o + z * simg + y * srow, wb}; vk.vkCmdCopyBuffer(g_cb, s.buf, b, 1, &bc); }
         }
     }

@@ -276,6 +276,14 @@ Games read this count as a position in their own command memory and size their h
 - **Check:** open: the fix runs on the phone; `t_nvn` needs a Mac (Metal) and has not run here.
 - **Found on:** [Super Smash Bros. Ultimate](../../dm/games/01006A800016E000/README.md) (13.0.5).
 
+### Copy strides kept in the command buffer
+
+- **Symptom:** `CRASH sig=11 addr=0 pc=0`, the host's `nvnCommandBufferCopyBufferToTexture` in the backtrace (`cmd_alloc_keep`) and `lr` in the game's memory callback, which reads a handler from its own object and calls it. On Super Smash Bros. Ultimate: `lr=main+0x31c14`, opening World of Light.
+- **Cause:** the callback is `nn::gfx`'s (`main+0x31be0`), which calls the out-of-memory handler the game set on its `nn::gfx` command buffer, without a check; the game sets none where it knows the memory is enough. It gives a texture upload 256 bytes (`main+0x3794830`) for a barrier and one buffer → texture copy. `SetCopyRowStride` / `SetCopyImageStride` are state of the command buffer (NVN has `GetCopyRowStride` / `GetCopyImageStride`, which read them from it), but the host recorded each as a 24-byte record: 16 + 24 + 24 + 200 + 16 kept = 280 bytes. `nn::gfx` sets both strides before every copy.
+- **Fix** (`hle_nvn.c`, `nvn_obj.h`): the strides are fields of `cmd_t`, and a copy carries them (`copy_strides`, 16 bytes after its texture snapshot) when either is set; the upload takes 240 bytes. The getters, unimplemented before, return them. The replays read a copy's own strides (`copy_strides_of`); `OP_COPY_STRIDE` stays in the replays for frame captures made before. The strides no longer carry over from one command buffer to another through the queue.
+- **Check:** the Android host builds; the record layout was checked on its own (copy 216 bytes with strides, 200 without; Smash's sequence 232 + 16 kept of 256). World of Light opens with the fix (AYN Thor, Adreno 740, Turnip; a run by hand with no crash and no new `[RED]` line in its log). Open: the system driver; `t_nvn` 6a and the Metal replay need a Mac and have not run here.
+- **Found on:** [Super Smash Bros. Ultimate](../../dm/games/01006A800016E000/README.md) (13.0.5).
+
 ### Prerecorded lists in slots of their measured size
 
 - **Symptom:** `CRASH sig=10` in `mtl_exec` after minutes of play, the fault address equal to `x19` and shaped like `0x1000000003`.
