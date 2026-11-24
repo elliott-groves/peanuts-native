@@ -96,9 +96,10 @@ typedef struct Pkg {
 } Pkg;
 typedef struct Src { NxContainer c; NxTitle *ts; int n; } Src;
 typedef struct Job {
-    Pkg pk[64]; int npk;
-    NxNca ncas[192]; int nncas;   // every NCA the trees read from (kept open: nodes point at them)
-    NxNcz *ncz[192];              // ncz[i]: the NCZ ncas[i] is read from (an NSZ's or XCZ's), else NULL
+    int cap;                      // room in the three below: every title of the inputs (nximport_write_nup), each at most one package read from one NCA
+    Pkg *pk; int npk;
+    NxNca *ncas; int nncas;       // every NCA the trees read from (kept open: nodes point at them, so the array never moves)
+    NxNcz **ncz;                  // ncz[i]: the NCZ ncas[i] is read from (an NSZ's or XCZ's), else NULL
     char tmp[1200];               // where solid NCZs are unpacked: a hidden folder beside the .nup
     long long prep_total, prep_done, prep_said; char prep_step[300];   // unpacking and checking the NCZs, before the trees: their own progress
     NxNode **dirs; uint32_t nd, dcap; NxNode **files; uint32_t nf, fcap; const char **step; // step[file id]
@@ -136,7 +137,7 @@ static void prep_tick(void *u, uint64_t n) {
 // A content NCA of title t (its id and the SHA-256 its CNMT records): <id>.nca, or <id>.ncz rebuilt from its compressed bytes and checked against both
 static NxNca *job_nca(Job *j, const NxTitle *t, const char *id, const uint8_t sha[32]) {
     const NxContainer *c = t->c;
-    if (j->nncas >= (int)(sizeof j->ncas / sizeof j->ncas[0])) { nx_err("too many NCAs"); return NULL; }
+    if (j->nncas >= j->cap) { nx_err("too many NCAs"); return NULL; }
     char nm[48]; snprintf(nm, sizeof nm, "%s.nca", id);
     const NxEntry *e = nx_container_find(c, nm); NxNcz *z = NULL;
     if (!e) { snprintf(nm, sizeof nm, "%s.ncz", id); e = nx_container_find(c, nm); }
@@ -179,7 +180,7 @@ static int job_ncz_bytes(const NxTitle *t, const char *id, uint64_t *sum) {
 }
 
 static int add_pkg(Job *j, const NxTitle *t, int kind, uint64_t tid, uint32_t ver, NxNode *exefs, NxNode *romfs) {
-    if (j->npk >= 64) { nx_err("too many packages"); return -1; }
+    if (j->npk >= j->cap) { nx_err("too many packages"); return -1; }
     Pkg *p = &j->pk[j->npk]; memset(p, 0, sizeof *p); p->t = t; p->kind = kind; p->tid = tid; p->ver = ver;
     if (!(p->root = nx_node_new("", 0, 1))) { nx_err("out of memory"); return -1; }
     if (exefs) { free(exefs->name); exefs->name = strdup("exefs"); if (!nx_node_add(p->root, exefs)) return -1; }
@@ -548,12 +549,16 @@ int nximport_write_nup(const char *out_nup, const char **inputs, int n_inputs, c
     Src *src = NULL; Job *j = NULL; int rc = -1; uint64_t base_tid;
     if (!nx_keys.loaded) { nx_err("keys not loaded (nximport_keys)"); return -1; }
     if (parse_tid(base_title_id, &base_tid)) { nx_err("bad base title id %s", base_title_id ? base_title_id : "(null)"); return -1; }
-    if (n_inputs < 1 || n_inputs > 64) { nx_err("1 to 64 inputs"); return -1; }
+    if (n_inputs < 1) { nx_err("no inputs"); return -1; }
     if (!(src = calloc((size_t)n_inputs, sizeof *src)) || !(j = calloc(1, sizeof *j))) { nx_err("out of memory"); goto out; }
     for (int i = 0; i < n_inputs; i++) src[i].c.fd = -1;
     j->progress = progress; j->user = user;
     if (progress) progress(user, "probe", 0, 0);
     for (int i = 0; i < n_inputs; i++) { if (nx_container_open(&src[i].c, inputs[i])) goto out; if (nx_container_titles(&src[i].c, &src[i].ts, &src[i].n)) goto out; }
+    // Room for every title, however many: there was a limit of 64 inputs and packages, and Super Smash Bros. Ultimate's base, update and 99 add-ons are 101
+    for (int i = 0; i < n_inputs; i++) j->cap += src[i].n;
+    { size_t n = j->cap ? (size_t)j->cap : 1;
+      if (!(j->pk = calloc(n, sizeof *j->pk)) || !(j->ncas = calloc(n, sizeof *j->ncas)) || !(j->ncz = calloc(n, sizeof *j->ncz))) NX_FAIL("out of memory"); }
     // the base first (its RomFS is the updates' base), then the updates by version, then the add-ons
     const NxTitle *base = NULL; NxNca *base_prog = NULL; int base_rom = -1;
     for (int i = 0; i < n_inputs && !base; i++) for (int k = 0; k < src[i].n; k++) if (src[i].ts[k].kind == 0 && src[i].ts[k].title_id == base_tid) { base = &src[i].ts[k]; break; }
@@ -562,14 +567,17 @@ int nximport_write_nup(const char *out_nup, const char **inputs, int n_inputs, c
     { const char *td = getenv("NXIMPORT_TMPDIR"), *sl = strrchr(out_nup, '/'), *bs = strrchr(out_nup, '\\'); if (bs && (!sl || bs > sl)) sl = bs;
       if (td && *td) snprintf(j->tmp, sizeof j->tmp, "%s", td);
       else snprintf(j->tmp, sizeof j->tmp, "%.*s.%s.unpack", sl ? (int)(sl - out_nup + 1) : 0, out_nup, sl ? sl + 1 : out_nup); }
-    { uint64_t sum = 0; uint32_t vers[64]; uint64_t aoc[64]; int nv = 0, na = 0;
-      if (base && job_ncz_bytes(base, base->program, &sum)) goto out;
-      for (int pass = 0; pass < 2; pass++) for (int i = 0; i < n_inputs; i++) for (int k = 0; k < src[i].n; k++) {
+    { uint64_t sum = 0; uint32_t *vers = calloc((size_t)j->cap + 1, sizeof *vers); uint64_t *aoc = calloc((size_t)j->cap + 1, sizeof *aoc); int nv = 0, na = 0, bad = !vers || !aoc;
+      if (bad) nx_err("out of memory");
+      if (!bad && base) bad = job_ncz_bytes(base, base->program, &sum);
+      for (int pass = 0; pass < 2; pass++) for (int i = 0; i < n_inputs; i++) for (int k = 0; k < src[i].n && !bad; k++) {
           const NxTitle *t = &src[i].ts[k]; int dup = 0;
           if (t->app_id != base_tid || t->kind != (pass ? 2 : 1)) continue;
-          if (t->kind == 1) { for (int q = 0; q < nv; q++) dup |= vers[q] == t->version; if (dup || nv == 64) continue; vers[nv++] = t->version; if (job_ncz_bytes(t, t->program, &sum)) goto out; }
-          else { for (int q = 0; q < na; q++) dup |= aoc[q] == t->title_id; if (dup || na == 64) continue; aoc[na++] = t->title_id; if (job_ncz_bytes(t, t->data, &sum)) goto out; }
+          if (t->kind == 1) { for (int q = 0; q < nv; q++) dup |= vers[q] == t->version; if (dup) continue; vers[nv++] = t->version; bad = job_ncz_bytes(t, t->program, &sum); }
+          else { for (int q = 0; q < na; q++) dup |= aoc[q] == t->title_id; if (dup) continue; aoc[na++] = t->title_id; bad = job_ncz_bytes(t, t->data, &sum); }
       }
+      free(vers); free(aoc);
+      if (bad) goto out;
       j->prep_total = (long long)sum; }
     if (base) {
         if (!base->program[0]) NX_FAIL("the base %s has no program NCA", base_title_id);
@@ -636,7 +644,7 @@ fail:
         for (int p = 0; p < j->npk; p++) { nx_node_free(j->pk[p].root); free(j->pk[p].meta); }   // the package's meta block (#158)
         for (int i = 0; i < j->nncas; i++) { nx_nca_close(&j->ncas[i]); nx_ncz_close(j->ncz[i]); }   // an NCZ's temporary file goes with it
         if (j->tmp[0] && !getenv("NXIMPORT_TMPDIR")) rmdir(j->tmp);   // the folder made for it, when empty (a folder of the caller's stays)
-        free(j->dirs); free(j->files); free(j->pool); free(j->idx); free(j->shamap); free(j->basefiles); free(j);
+        free(j->dirs); free(j->files); free(j->pool); free(j->idx); free(j->shamap); free(j->basefiles); free(j->pk); free(j->ncas); free(j->ncz); free(j);
     }
     if (src) { for (int i = 0; i < n_inputs; i++) { free(src[i].ts); nx_container_close(&src[i].c); } free(src); }
     nx_ncz_thread_done();

@@ -195,6 +195,29 @@ int main(int argc, char **argv) {
       CHECK(b && len == 5 && !memcmp(b, "hello", 5), "a file of the update's RomFS reads"); free(b); }
     free(v.b);
 
+    // ---- a base, its update and 99 add-ons: as many as Super Smash Bros. Ultimate has (the writer took at most 64 inputs and packages)
+    printf("a base, its update and 99 add-ons\n");
+    { enum { NA = 99 }; static FxAddon many[NA]; const char *in[NA + 2]; char t2[17], tag[32], path[128]; const uint64_t T = TID + 0x30000;
+      snprintf(t2, sizeof t2, "%016llx", (unsigned long long)T);
+      static char mb[600], mu[600]; snprintf(mb, sizeof mb, "%s/many-base.nsp", dir); snprintf(mu, sizeof mu, "%s/many-update.nsp", dir);
+      dump(&k, mb, T, T, 0, 0, NULL); dump(&k, mu, T + 0x800, T, 1, 0x20000, NULL);
+      in[0] = mb; in[1] = mu;
+      for (int i = 0; i < NA; i++) { snprintf(tag, sizeof tag, "many-dlc%d", i + 1); fx_addon(&k, dir, tag, T, i + 1, 0, 3, &many[i]); in[i + 2] = many[i].path; }
+      snprintf(nup, sizeof nup, "%s/many.nup", dir);
+      CHECK(!nximport_write_nup(nup, in, NA + 2, t2, NULL, NULL), "the .nup of 101 dumps is made (%s)", nximport_last_error());
+      CHECK(!nximport_verify_nup(nup, NULL, NULL), "and it verifies (%s)", nximport_last_error());
+      CHECK(!view(nup, &v) && v.npk == NA + 1, "100 packages: the update and every add-on (%u)", v.npk);
+      int same = 0;   // the last file of each add-on that has bytes
+      for (int i = 0; i < NA; i++) {
+          const FxFile *f = NULL; for (int j = 0; j < many[i].nf; j++) if (many[i].f[j].size) f = &many[i].f[j];
+          snprintf(path, sizeof path, "addon/%016llx/romfs/%s", (unsigned long long)(T + 0x1000 + (uint64_t)i + 1), f->path);
+          size_t len; uint8_t *b = extract(nup, path, dir, &len); same += b && len == f->size && !memcmp(b, f->data, len); free(b);
+      }
+      CHECK(same == NA, "a file of every add-on reads as its dump has it (%d of %d)", same, NA);
+      for (int i = 0; i < NA; i++) { for (int j = 0; j < many[i].nf; j++) free((void *)many[i].f[j].data); free(many[i].f); }
+      free(v.b); }
+    { const char *in[1] = { NULL }; CHECK(nximport_write_nup(nup, in, 0, tid, NULL, NULL), "no inputs at all is refused"); }
+
     free(na); free(nb); free(nf); free(icon_en); free(icon_ja); free(icon_up);
     for (int i = 0; i < dlc.nf; i++) free((void *)dlc.f[i].data); free(dlc.f);
     if (!keep) nftw(dir, rm_cb, 16, FTW_DEPTH | FTW_PHYS);
