@@ -352,6 +352,26 @@ void ModRuntime::InitializeGameModule() {
         }
         if (std::strcmp(name, "__map_state") == 0) {
             rt.AcceptModuleMapState(value);
+        } else if (std::strcmp(name, "__press") == 0) {
+            // PNRT: a module's controller input, "<sequence>:<chord>:<frames>" (a chord as a button
+            // action's: "A", "B", "L0.6/-0.4"; frames held, at least 2): pressed once each time the
+            // sequence changes, on the virtual gamepad as a button action is. A module that steers
+            // a game's own cursor (Super Smash Bros. Ultimate's character select, which takes no
+            // taps) reads where it is and presses its way there; a host without this ignores it.
+            static std::mutex mu;
+            static std::string last;
+            std::scoped_lock lk{mu};
+            const std::string_view v{value};
+            const size_t a = v.find(':'), b = a == std::string_view::npos ? a : v.find(':', a + 1);
+            if (b != std::string_view::npos && v.substr(0, a) != last) {
+                last = std::string{v.substr(0, a)};
+                const std::string chord{v.substr(a + 1, b - a - 1)};
+                const u32 frames = static_cast<u32>(std::strtoul(std::string{v.substr(b + 1)}.c_str(), nullptr, 10));
+                if (!rt.PressToken(chord, std::clamp(frames, 2u, 600u))) {
+                    LOG_WARNING(Core, "DSMod module press '{}' not done (not the runtime's thread, or not a chord)", chord);
+                }
+            }
+            rt.module_snapshot->texts[name] = value;
         } else {
             rt.module_snapshot->texts[name] = value;
         }
