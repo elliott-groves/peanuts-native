@@ -1,10 +1,12 @@
 package dev.peanuts.online;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
@@ -33,6 +35,8 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -196,17 +200,23 @@ public final class Nextendo {
                     .appendQueryParameter("redirect_uri", REDIRECT).appendQueryParameter("scope", SCOPES)
                     .appendQueryParameter("state", state).appendQueryParameter("code_challenge", challenge)
                     .appendQueryParameter("code_challenge_method", "S256").build();
-            UI.post(() -> a.startActivity(new Intent(Intent.ACTION_VIEW, url)));
+            Intent open = new Intent(Intent.ACTION_VIEW, url);
+            Bundle ct = new Bundle();
+            ct.putBinder("android.support.customtabs.extra.SESSION", null);   // open as a Custom Tab when the browser supports it (falls back to ACTION_VIEW)
+            open.putExtras(ct);
+            open.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 1);
+            UI.post(() -> a.startActivity(open));
             while (true) {
                 Socket s;
                 try { s = server.accept(); } catch (SocketTimeoutException e) { return "no answer from the browser within 5 minutes"; }
                 Uri cb;
-                try { cb = readCallback(s, state); } finally { s.close(); }
+                try { cb = readCallback(s, state); } catch (java.io.IOException ignored) { continue; } finally { s.close(); }
                 if (cb == null) continue;   // /favicon.ico and the like
                 if (cb.getQueryParameter("error") != null) return "Nextendo refused: " + cb.getQueryParameter("error");
                 if (!state.equals(cb.getQueryParameter("state"))) return "the answer did not match this sign-in";
                 String code = cb.getQueryParameter("code");
                 if (code == null) return "no code in Nextendo's answer";
+                if (!waitForForeground(a, app)) return "sign-in cancelled";   // Android 15 aborts outbound sockets while the browser is still in front
                 JSONObject t = post("grant_type=authorization_code&code=" + enc(code) + "&client_id=" + enc(CLIENT_ID)
                         + "&redirect_uri=" + enc(REDIRECT) + "&code_verifier=" + enc(verifier));
                 if (t == null || t.optString("refresh_token").isEmpty() || t.optString("access_token").isEmpty()) return "Nextendo gave no tokens";
@@ -219,6 +229,30 @@ public final class Nextendo {
         }
     }
 
+    /** Waits until the calling activity is resumed in the foreground so Android does not abort the token exchange socket */
+    private static boolean waitForForeground(Activity a, Context app) throws InterruptedException {
+        if (!(app instanceof Application)) return !a.isFinishing() && !a.isDestroyed();
+        Application application = (Application) app;
+        CountDownLatch latch = new CountDownLatch(1);
+        Application.ActivityLifecycleCallbacks cb = new Application.ActivityLifecycleCallbacks() {
+            @Override public void onActivityResumed(Activity act) { if (act == a) latch.countDown(); }
+            @Override public void onActivityDestroyed(Activity act) { if (act == a) latch.countDown(); }
+            @Override public void onActivityCreated(Activity act, Bundle b) {}
+            @Override public void onActivityStarted(Activity act) {}
+            @Override public void onActivityPaused(Activity act) {}
+            @Override public void onActivitySaveInstanceState(Activity act, Bundle b) {}
+            @Override public void onActivityStopped(Activity act) {}
+        };
+        application.registerActivityLifecycleCallbacks(cb);
+        try {
+            UI.post(() -> { if (a.hasWindowFocus() || a.isFinishing() || a.isDestroyed()) latch.countDown(); });
+            latch.await(SIGN_IN_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } finally {
+            application.unregisterActivityLifecycleCallbacks(cb);
+        }
+        return !a.isFinishing() && !a.isDestroyed();
+    }
+
     /** The callback's URI (null for any other request), after answering the browser with a short page */
     private static Uri readCallback(Socket s, String state) throws Exception {
         s.setSoTimeout(10_000);
@@ -228,7 +262,8 @@ public final class Nextendo {
         boolean cb = u != null && "/callback".equals(u.getPath()), ok = cb && u.getQueryParameter("code") != null && state.equals(u.getQueryParameter("state"));
         String page = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"></head>"
                 + "<body style=\"font-family:sans-serif;text-align:center;padding:40px\">"
-                + (ok ? "<h2>Peanuts Native: signed in</h2><p>You can go back to Peanuts Native now.</p>" : cb ? "<h2>Peanuts Native: sign-in not completed</h2>" : "")
+                + (ok ? "<h2>Peanuts Native: signed in</h2><p>Tap &times; above to return to Peanuts Native.</p>"
+                      : cb ? "<h2>Peanuts Native: sign-in not completed</h2>" : "")
                 + "</body></html>";
         byte[] body = page.getBytes(StandardCharsets.UTF_8);
         OutputStream o = s.getOutputStream();
