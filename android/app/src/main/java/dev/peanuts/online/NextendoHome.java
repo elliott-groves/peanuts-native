@@ -88,6 +88,7 @@ public final class NextendoHome {
         t.setPadding(0, PUi.dp(a, 2), 0, 0);
         t.setMinHeight(PUi.dp(a, 16));
         t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        t.setOnClickListener(v -> face.performClick());
         column.addView(t, PUi.wrap());
     }
 
